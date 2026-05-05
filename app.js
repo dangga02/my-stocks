@@ -1,11 +1,11 @@
 /**
- * 내 주식 트리맵 PWA
- * Cloudflare Worker 백엔드를 통해 KIS API와 통신합니다.
+ * 내 주식 트리맵 PWA — 검색 자동완성 + KIS Proxy + 시장지표 + 외인/기관/개인
  */
 
 const STORAGE_STOCKS = 'kr_stocks_v1';
 const STORAGE_API_URL = 'kr_api_url_v1';
 const STORAGE_PRICES_CACHE = 'kr_prices_cache_v1';
+const STORAGE_TICKERS_CACHE = 'kr_tickers_cache_v1';
 
 const DEFAULT_STOCKS = [
   { ticker: '005930', name: '삼성전자' },
@@ -20,6 +20,8 @@ let stocks = [];
 let prices = {};
 let apiBaseUrl = '';
 let deferredInstallPrompt = null;
+let tickerData = [];
+let searchAbortController = null;  // 이전 검색 취소용
 
 // ===== 저장소 =====
 function loadStocks() {
@@ -30,27 +32,19 @@ function loadStocks() {
   stocks = [...DEFAULT_STOCKS];
   saveStocks();
 }
-function saveStocks() {
-  try { localStorage.setItem(STORAGE_STOCKS, JSON.stringify(stocks)); } catch (e) {}
-}
-function loadApiUrl() {
-  try { apiBaseUrl = localStorage.getItem(STORAGE_API_URL) || ''; } catch (e) {}
-}
-function saveApiUrl(url) {
-  try { localStorage.setItem(STORAGE_API_URL, url); } catch (e) {}
-  apiBaseUrl = url;
-}
+function saveStocks() { try { localStorage.setItem(STORAGE_STOCKS, JSON.stringify(stocks)); } catch (e) {} }
+function loadApiUrl() { try { apiBaseUrl = localStorage.getItem(STORAGE_API_URL) || ''; } catch (e) {} }
+function saveApiUrl(url) { try { localStorage.setItem(STORAGE_API_URL, url); } catch (e) {} apiBaseUrl = url; }
 function loadCachedPrices() {
-  try {
-    const raw = localStorage.getItem(STORAGE_PRICES_CACHE);
-    if (raw) prices = JSON.parse(raw);
-  } catch (e) {}
+  try { const raw = localStorage.getItem(STORAGE_PRICES_CACHE); if (raw) prices = JSON.parse(raw); } catch (e) {}
 }
-function saveCachedPrices() {
-  try { localStorage.setItem(STORAGE_PRICES_CACHE, JSON.stringify(prices)); } catch (e) {}
+function saveCachedPrices() { try { localStorage.setItem(STORAGE_PRICES_CACHE, JSON.stringify(prices)); } catch (e) {} }
+function loadCachedTickers() {
+  try { const raw = localStorage.getItem(STORAGE_TICKERS_CACHE); if (raw) tickerData = JSON.parse(raw); } catch (e) {}
 }
+function saveCachedTickers() { try { localStorage.setItem(STORAGE_TICKERS_CACHE, JSON.stringify(tickerData)); } catch (e) {} }
 
-// ===== API 호출 =====
+// ===== API =====
 async function fetchPrice(ticker) {
   if (!apiBaseUrl) throw new Error('API 주소가 설정되지 않았습니다');
   const res = await fetch(`${apiBaseUrl}/price?ticker=${ticker}`);
@@ -60,7 +54,6 @@ async function fetchPrice(ticker) {
   }
   return await res.json();
 }
-
 async function fetchChart(ticker, period = 'D') {
   if (!apiBaseUrl) throw new Error('API 주소가 설정되지 않았습니다');
   const res = await fetch(`${apiBaseUrl}/chart?ticker=${ticker}&period=${period}`);
@@ -70,13 +63,34 @@ async function fetchChart(ticker, period = 'D') {
   }
   return await res.json();
 }
+async function fetchInvestor(ticker) {
+  if (!apiBaseUrl) throw new Error('API 주소가 설정되지 않았습니다');
+  const res = await fetch(`${apiBaseUrl}/investor?ticker=${ticker}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.error || `HTTP ${res.status}`);
+  }
+  return await res.json();
+}
+async function fetchTickers() {
+  if (!apiBaseUrl) return null;
+  const res = await fetch(`${apiBaseUrl}/tickers`);
+  if (!res.ok) return null;
+  return await res.json();
+}
+
+// 실시간 검색 — 백엔드 → 네이버 금융 자동완성
+async function searchStocksRemote(query, signal) {
+  if (!apiBaseUrl) return [];
+  const res = await fetch(`${apiBaseUrl}/search?q=${encodeURIComponent(query)}`, { signal });
+  if (!res.ok) return [];
+  const data = await res.json();
+  return data.stocks || [];
+}
 
 async function fetchAllPrices() {
   const status = document.getElementById('status');
-  if (stocks.length === 0) {
-    setStatus('');
-    return;
-  }
+  if (stocks.length === 0) { setStatus(''); return; }
   if (!apiBaseUrl) {
     setStatus('API 주소를 먼저 설정해주세요', true);
     document.getElementById('settings-row').classList.add('show');
@@ -86,37 +100,41 @@ async function fetchAllPrices() {
   const refreshBtn = document.getElementById('refresh-btn');
   refreshBtn.classList.add('spinning');
 
-  let done = 0;
-  let fails = 0;
-  // 동시 호출보다 순차가 안전 (KIS rate limit)
+  let done = 0, fails = 0;
   for (const s of stocks) {
     try {
       const p = await fetchPrice(s.ticker);
       prices[s.ticker] = p;
-    } catch (e) {
-      fails++;
-      console.warn(`${s.ticker} 실패:`, e.message);
-    }
+    } catch (e) { fails++; }
     done++;
     setStatus(`시세 가져오는 중… (${done}/${stocks.length})`);
-    renderTreemap(); // 점진적 렌더
+    renderTreemap();
   }
 
   saveCachedPrices();
   refreshBtn.classList.remove('spinning');
 
   const now = new Date().toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' });
-  if (fails > 0) {
-    setStatus(`${stocks.length - fails}/${stocks.length}개 로드 · ${now}`);
-  } else {
-    setStatus(`${stocks.length}개 종목 · ${now} 업데이트`);
-  }
+  if (fails > 0) setStatus(`${stocks.length - fails}/${stocks.length}개 로드 · ${now}`);
+  else setStatus(`${stocks.length}개 종목 · ${now} 업데이트`);
+}
+
+async function refreshTickers() {
+  if (!apiBaseUrl) return;
+  try {
+    const data = await fetchTickers();
+    if (data && data.tickers && data.tickers.length > 0) {
+      tickerData = data.tickers;
+      saveCachedTickers();
+      renderTickerBar();
+    }
+  } catch (e) {}
 }
 
 function setStatus(text, isError = false) {
   const status = document.getElementById('status');
   status.innerHTML = `
-    <span style="${isError ? 'color:#ff8080' : ''}">${text}</span>
+    <span style="${isError ? 'color:var(--up)' : ''}">${text}</span>
     <button class="settings-link" id="settings-link">설정</button>
   `;
   document.getElementById('settings-link').onclick = () => {
@@ -125,7 +143,6 @@ function setStatus(text, isError = false) {
   };
 }
 
-// ===== 색상 =====
 function colorForChange(pct) {
   if (pct == null || isNaN(pct)) return { bg: '#3a3a3a', text: '#cccccc' };
   if (pct > 3) return { bg: '#7c1e1e', text: '#ffe5e5' };
@@ -137,12 +154,11 @@ function colorForChange(pct) {
   return { bg: '#0f3158', text: '#cce0ff' };
 }
 
-// ===== 렌더링 =====
 function renderTreemap() {
   const container = document.getElementById('treemap');
   container.innerHTML = '';
   if (stocks.length === 0) {
-    container.innerHTML = `<div class="empty">아직 종목이 없어요.<br>위 입력창에 종목코드(6자리)를 입력하고<br>+ 추가 버튼을 눌러주세요.</div>`;
+    container.innerHTML = `<div class="empty">아직 종목이 없어요.<br>위에서 종목명을 검색해서 추가해보세요.</div>`;
     return;
   }
   stocks.forEach(s => {
@@ -156,7 +172,6 @@ function renderTreemap() {
     const remove = document.createElement('button');
     remove.className = 'remove-btn';
     remove.textContent = '×';
-    remove.setAttribute('aria-label', '삭제');
     remove.onclick = (e) => {
       e.stopPropagation();
       if (!confirm(`${s.name}을(를) 삭제할까요?`)) return;
@@ -176,9 +191,7 @@ function renderTreemap() {
     if (p) {
       const sign = p.changePct >= 0 ? '+' : '';
       pct.textContent = `${sign}${p.changePct.toFixed(2)}%`;
-    } else {
-      pct.textContent = '—';
-    }
+    } else pct.textContent = '—';
 
     const price = document.createElement('div');
     price.className = 'cell-price';
@@ -193,9 +206,149 @@ function renderTreemap() {
   });
 }
 
+// ===== 검색 결과 렌더링 =====
+function highlightMatch(text, query) {
+  if (!query) return text;
+  const q = query.trim();
+  if (!q) return text;
+  const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return text.replace(new RegExp(`(${escaped})`, 'gi'), '<mark>$1</mark>');
+}
+
+async function renderSearchResults(query) {
+  const container = document.getElementById('search-results');
+  const q = query.trim();
+  if (!q) {
+    container.classList.remove('show');
+    container.innerHTML = '';
+    return;
+  }
+
+  // 로딩 표시
+  container.classList.add('show');
+  container.innerHTML = `<div class="search-empty">검색 중…</div>`;
+
+  // 이전 검색 취소
+  if (searchAbortController) searchAbortController.abort();
+  searchAbortController = new AbortController();
+
+  let results = [];
+  try {
+    results = await searchStocksRemote(q, searchAbortController.signal);
+  } catch (e) {
+    if (e.name === 'AbortError') return; // 새 검색이 들어와서 취소됨
+    container.innerHTML = `<div class="search-empty">검색 실패: ${e.message}</div>`;
+    return;
+  }
+
+  if (results.length === 0) {
+    container.innerHTML = `<div class="search-empty">'${q}'에 해당하는 종목이 없어요</div>`;
+    return;
+  }
+
+  container.innerHTML = results.slice(0, 8).map(s => {
+    const alreadyAdded = stocks.some(x => x.ticker === s.ticker);
+    const tagClass = s.market === 'KOSDAQ' ? 'kosdaq' : 'kospi';
+    const tagLabel = s.market === 'KOSDAQ' ? 'KOSDAQ' : 'KOSPI';
+    return `
+      <div class="search-result-item" data-ticker="${s.ticker}" data-name="${s.name}" data-added="${alreadyAdded}">
+        <span class="sr-tag ${tagClass}">${tagLabel}</span>
+        <span class="sr-name">${highlightMatch(s.name, q)}${alreadyAdded ? ' ✓' : ''}</span>
+        <span class="sr-code">${s.ticker}</span>
+      </div>
+    `;
+  }).join('');
+  container.querySelectorAll('.search-result-item').forEach(el => {
+    el.onclick = () => addStockFromSearch(el.dataset.ticker, el.dataset.name, el.dataset.added === 'true');
+  });
+}
+
+async function addStockFromSearch(ticker, name, alreadyAdded) {
+  const input = document.getElementById('search-input');
+  const results = document.getElementById('search-results');
+
+  if (alreadyAdded) {
+    setStatus(`${name}은(는) 이미 추가되어 있어요`);
+    input.value = '';
+    results.classList.remove('show');
+    input.blur();
+    return;
+  }
+
+  stocks.push({ ticker, name });
+  saveStocks();
+  input.value = '';
+  results.classList.remove('show');
+  input.blur();
+  renderTreemap();
+  setStatus(`${name} 시세 가져오는 중…`);
+  try {
+    const p = await fetchPrice(ticker);
+    prices[ticker] = p;
+    saveCachedPrices();
+    renderTreemap();
+    setStatus(`${name} 추가 완료`);
+  } catch (e) {
+    setStatus(`${name} 추가됨 (시세 조회 실패: ${e.message})`, true);
+  }
+}
+
+// ===== 하단 시장 지표 띠 =====
+function formatTickerPrice(item) {
+  const v = item.price;
+  if (item.type === 'index') return v.toFixed(2);
+  if (item.type === 'crypto') {
+    if (v >= 10000) return Math.round(v).toLocaleString('en-US');
+    return v.toFixed(0);
+  }
+  if (item.type === 'yahoo') {
+    if (item.key && item.key.includes('=X')) return v.toFixed(2);
+    return v.toFixed(2);
+  }
+  return v.toFixed(2);
+}
+function iconClassForType(item) {
+  if (item.type === 'index') return 'idx';
+  if (item.type === 'crypto') return 'crypto';
+  if (item.key && item.key.includes('=X')) return 'fx';
+  if (item.key && (item.key === 'CL=F' || item.key === 'GC=F')) return 'cmd';
+  return 'fut';
+}
+function iconLetterFor(item) {
+  if (item.type === 'index') return 'KR';
+  if (item.type === 'crypto') return '₿';
+  if (item.key && item.key.includes('=X')) return '환';
+  if (item.key === 'CL=F') return 'CL';
+  if (item.key === 'GC=F') return 'AU';
+  if (item.key === 'NQ=F') return 'NQ';
+  if (item.key === 'ES=F') return 'ES';
+  return '·';
+}
+function renderTickerBar() {
+  const track = document.getElementById('ticker-track');
+  if (!tickerData || tickerData.length === 0) {
+    track.innerHTML = '<div class="ticker-loading">시장 지표 불러오는 중…</div>';
+    return;
+  }
+  const itemsHtml = tickerData.map(t => {
+    const sign = t.changePct >= 0 ? '+' : '';
+    const direction = t.changePct > 0.01 ? 'up' : (t.changePct < -0.01 ? 'down' : 'neutral');
+    const arrow = t.changePct > 0.01 ? '▲' : (t.changePct < -0.01 ? '▼' : '·');
+    return `
+      <div class="ticker-item">
+        <span class="t-icon ${iconClassForType(t)}">${iconLetterFor(t)}</span>
+        <span class="t-label">${t.label}</span>
+        <span class="t-price">${formatTickerPrice(t)}</span>
+        <span class="t-change ${direction}">${arrow} ${sign}${t.changePct.toFixed(2)}%</span>
+      </div>
+    `;
+  }).join('');
+  track.innerHTML = itemsHtml + itemsHtml;
+}
+
 // ===== 상세 모달 =====
 function renderChart(candles, changePct) {
-  if (!candles || candles.length < 2) return '<div style="color:#666;font-size:12px;text-align:center;padding:20px;">차트 데이터 없음</div>';
+  if (!candles || candles.length < 2) return '<div class="loading-mini">차트 데이터 없음</div>';
   const values = candles.map(c => c.close);
   const min = Math.min(...values);
   const max = Math.max(...values);
@@ -204,22 +357,198 @@ function renderChart(candles, changePct) {
   const points = values.map((v, i) => {
     const x = (i / (values.length - 1)) * w;
     const y = h - ((v - min) / range) * (h - 20) - 10;
-    return `${x.toFixed(1)},${y.toFixed(1)}`;
-  }).join(' ');
-  const stroke = changePct >= 0 ? '#ff6b6b' : '#5599ff';
-  const fill = changePct >= 0 ? 'rgba(255,107,107,0.15)' : 'rgba(85,153,255,0.15)';
-  const areaPoints = `0,${h} ${points} ${w},${h}`;
+    return { x, y, value: v, date: candles[i].date };
+  });
+  const pointsStr = points.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
+  const isLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+  const stroke = changePct >= 0
+    ? (isLight ? '#d4424a' : '#ff6b6b')
+    : (isLight ? '#2d6fc9' : '#5599ff');
+  const fill = changePct >= 0
+    ? (isLight ? 'rgba(212,66,74,0.10)' : 'rgba(255,107,107,0.15)')
+    : (isLight ? 'rgba(45,111,201,0.10)' : 'rgba(85,153,255,0.15)');
+  const areaPoints = `0,${h} ${pointsStr} ${w},${h}`;
+
+  // 데이터를 data 속성으로 임베드 → setupChartHover에서 사용
+  const dataAttr = encodeURIComponent(JSON.stringify(points));
+
   return `
-    <svg viewBox="0 0 ${w} ${h}" style="width:100%;height:140px;display:block;" preserveAspectRatio="none" role="img" aria-label="주가 차트">
-      <polygon points="${areaPoints}" fill="${fill}" />
-      <polyline points="${points}" fill="none" stroke="${stroke}" stroke-width="1.5" />
-    </svg>
+    <div class="chart-svg-wrap" data-chart-points="${dataAttr}" data-stroke="${stroke}" style="position: relative; user-select: none;">
+      <svg viewBox="0 0 ${w} ${h}" style="width:100%;height:140px;display:block;" preserveAspectRatio="none" role="img" aria-label="주가 차트">
+        <polygon points="${areaPoints}" fill="${fill}" />
+        <polyline points="${pointsStr}" fill="none" stroke="${stroke}" stroke-width="1.5" />
+        <line class="chart-cursor-line" x1="0" y1="0" x2="0" y2="${h}" stroke="rgba(150,150,150,0.5)" stroke-width="1" stroke-dasharray="3,3" style="display:none;" />
+        <circle class="chart-cursor-dot" cx="0" cy="0" r="4" fill="${stroke}" stroke="var(--bg-2)" stroke-width="2" style="display:none;" />
+      </svg>
+      <div class="chart-tooltip" style="display:none; position:absolute; background:var(--bg-elev); border:1px solid var(--border-strong); border-radius:6px; padding:6px 10px; font-size:11px; line-height:1.5; box-shadow:0 2px 8px rgba(0,0,0,0.4); white-space:nowrap; pointer-events:none; z-index:5;">
+        <div class="ct-date" style="color:var(--text-3); font-size:10px;"></div>
+        <div class="ct-price" style="font-weight:500; color:var(--text);"></div>
+      </div>
+    </div>
   `;
 }
 
-function formatDate(yyyymmdd) {
+// 차트에 호버/터치 이벤트 추가
+function setupChartHover(container) {
+  const wrap = container.querySelector('.chart-svg-wrap');
+  if (!wrap) return;
+  const svg = wrap.querySelector('svg');
+  const line = wrap.querySelector('.chart-cursor-line');
+  const dot = wrap.querySelector('.chart-cursor-dot');
+  const tooltip = wrap.querySelector('.chart-tooltip');
+  const dateEl = tooltip.querySelector('.ct-date');
+  const priceEl = tooltip.querySelector('.ct-price');
+
+  let points;
+  try {
+    points = JSON.parse(decodeURIComponent(wrap.dataset.chartPoints));
+  } catch (e) { return; }
+  if (!points || points.length === 0) return;
+
+  const W = 600;
+
+  function getXFromEvent(e) {
+    const rect = wrap.getBoundingClientRect();
+    let clientX;
+    if (e.touches && e.touches[0]) clientX = e.touches[0].clientX;
+    else clientX = e.clientX;
+    const ratio = (clientX - rect.left) / rect.width;
+    return Math.max(0, Math.min(1, ratio)) * W;
+  }
+
+  function findClosest(x) {
+    let closest = points[0];
+    let minDist = Math.abs(points[0].x - x);
+    for (const p of points) {
+      const d = Math.abs(p.x - x);
+      if (d < minDist) { minDist = d; closest = p; }
+    }
+    return closest;
+  }
+
+  function showAt(p) {
+    line.setAttribute('x1', p.x);
+    line.setAttribute('x2', p.x);
+    line.style.display = '';
+    dot.setAttribute('cx', p.x);
+    dot.setAttribute('cy', p.y);
+    dot.style.display = '';
+
+    const rect = wrap.getBoundingClientRect();
+    const xPx = (p.x / W) * rect.width;
+    // 툴팁 위치: 점 위에 표시, 화면 밖으로 안 나가게
+    const tipW = 80;
+    let left = xPx - tipW / 2;
+    if (left < 4) left = 4;
+    if (left + tipW > rect.width - 4) left = rect.width - tipW - 4;
+    tooltip.style.left = `${left}px`;
+    tooltip.style.top = `4px`;
+    tooltip.style.display = '';
+
+    dateEl.textContent = formatDateMD(p.date);
+    priceEl.textContent = `${Math.round(p.value).toLocaleString('ko-KR')}원`;
+  }
+
+  function hide() {
+    line.style.display = 'none';
+    dot.style.display = 'none';
+    tooltip.style.display = 'none';
+  }
+
+  // 마우스
+  wrap.addEventListener('mousemove', (e) => {
+    const x = getXFromEvent(e);
+    showAt(findClosest(x));
+  });
+  wrap.addEventListener('mouseleave', hide);
+
+  // 터치 (모바일)
+  wrap.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    const x = getXFromEvent(e);
+    showAt(findClosest(x));
+  }, { passive: false });
+  wrap.addEventListener('touchmove', (e) => {
+    e.preventDefault();
+    const x = getXFromEvent(e);
+    showAt(findClosest(x));
+  }, { passive: false });
+  wrap.addEventListener('touchend', () => {
+    setTimeout(hide, 1500); // 터치 후 1.5초 뒤 사라짐
+  });
+}
+
+function formatDateMD(yyyymmdd) {
   if (!yyyymmdd || yyyymmdd.length !== 8) return '';
   return `${yyyymmdd.slice(4,6)}.${yyyymmdd.slice(6,8)}`;
+}
+
+function formatQty(n) {
+  if (n == null || isNaN(n)) return '—';
+  const abs = Math.abs(n);
+  const sign = n >= 0 ? '+' : '−';
+  if (abs >= 100000000) return `${sign}${(abs / 100000000).toFixed(2)}억`;
+  if (abs >= 10000) return `${sign}${(abs / 10000).toFixed(1)}만`;
+  return `${sign}${abs.toLocaleString('ko-KR')}`;
+}
+function formatAmount(n) {
+  if (n == null || isNaN(n) || n === 0) return '';
+  const abs = Math.abs(n);
+  const sign = n >= 0 ? '+' : '−';
+  if (abs >= 100000000) return `${sign}${(abs / 100000000).toFixed(0)}억원`;
+  if (abs >= 10000000) return `${sign}${(abs / 10000000).toFixed(1)}천만`;
+  return `${sign}${(abs / 10000).toFixed(0)}만원`;
+}
+function netClass(n) {
+  if (n > 0) return 'up';
+  if (n < 0) return 'down';
+  return 'neutral';
+}
+
+function renderInvestorSection(days) {
+  if (!days || days.length === 0) {
+    return `<div class="loading-mini">매매 동향 데이터 없음</div>`;
+  }
+  const today = days[0];
+  const summaryHtml = `
+    <div class="investor-summary">
+      <div class="investor-card">
+        <div class="inv-label">외국인</div>
+        <div class="inv-net ${netClass(today.foreignNet)}">${formatQty(today.foreignNet)}</div>
+        <div class="inv-amount">${formatAmount(today.foreignNetAmount)}</div>
+      </div>
+      <div class="investor-card">
+        <div class="inv-label">기관</div>
+        <div class="inv-net ${netClass(today.institutionNet)}">${formatQty(today.institutionNet)}</div>
+        <div class="inv-amount">${formatAmount(today.institutionNetAmount)}</div>
+      </div>
+      <div class="investor-card">
+        <div class="inv-label">개인</div>
+        <div class="inv-net ${netClass(today.personNet)}">${formatQty(today.personNet)}</div>
+        <div class="inv-amount">${formatAmount(today.personNetAmount)}</div>
+      </div>
+    </div>
+  `;
+  const recent = days.slice(0, 7);
+  const tableRows = recent.map(d => `
+    <div class="row">
+      <div class="col date">${formatDateMD(d.date)}</div>
+      <div class="col ${netClass(d.foreignNet)}">${formatQty(d.foreignNet)}</div>
+      <div class="col ${netClass(d.institutionNet)}">${formatQty(d.institutionNet)}</div>
+      <div class="col ${netClass(d.personNet)}">${formatQty(d.personNet)}</div>
+    </div>
+  `).join('');
+  return summaryHtml + `
+    <div class="investor-table">
+      <div class="row head">
+        <div class="col date">날짜</div>
+        <div class="col">외국인</div>
+        <div class="col">기관</div>
+        <div class="col">개인</div>
+      </div>
+      ${tableRows}
+    </div>
+  `;
 }
 
 async function showDetail(stock) {
@@ -277,9 +606,17 @@ async function showDetail(stock) {
         <button class="chart-tab" data-period="M">월봉</button>
       </div>
       <div id="chart-container">
-        <div style="color:#666;font-size:12px;text-align:center;padding:30px 0;">차트 불러오는 중…</div>
+        <div class="loading-mini">차트 불러오는 중…</div>
       </div>
       <div class="chart-labels" id="chart-labels"></div>
+    </div>
+
+    <div class="section-title">
+      <span>외인 / 기관 / 개인</span>
+      <span class="sub">단위: 주 (순매수)</span>
+    </div>
+    <div id="investor-container">
+      <div class="loading-mini">매매 동향 불러오는 중…</div>
     </div>
 
     <div class="link-grid">
@@ -291,10 +628,9 @@ async function showDetail(stock) {
   `;
   overlay.classList.add('show');
 
-  // 차트 로드
   loadChartFor(stock.ticker, 'D');
+  loadInvestorFor(stock.ticker);
 
-  // 차트 탭 핸들러
   modal.querySelectorAll('.chart-tab').forEach(tab => {
     tab.onclick = () => {
       modal.querySelectorAll('.chart-tab').forEach(t => t.classList.remove('active'));
@@ -308,52 +644,74 @@ async function loadChartFor(ticker, period) {
   const container = document.getElementById('chart-container');
   const labels = document.getElementById('chart-labels');
   if (!container) return;
-  container.innerHTML = `<div style="color:#666;font-size:12px;text-align:center;padding:30px 0;">차트 불러오는 중…</div>`;
+  container.innerHTML = `<div class="loading-mini">차트 불러오는 중…</div>`;
   try {
     const data = await fetchChart(ticker, period);
     const candles = data.candles || [];
     const p = prices[ticker];
     container.innerHTML = renderChart(candles, p ? p.changePct : 0);
+    setupChartHover(container);
     if (candles.length >= 2) {
-      labels.innerHTML = `<span>${formatDate(candles[0].date)}</span><span>${formatDate(candles[candles.length - 1].date)}</span>`;
-    } else {
-      labels.innerHTML = '';
-    }
+      labels.innerHTML = `<span>${formatDateMD(candles[0].date)}</span><span>${formatDateMD(candles[candles.length - 1].date)}</span>`;
+    } else labels.innerHTML = '';
   } catch (e) {
-    container.innerHTML = `<div style="color:#ff8080;font-size:12px;text-align:center;padding:20px;">차트 로드 실패: ${e.message}</div>`;
+    container.innerHTML = `<div class="error-box">차트 로드 실패: ${e.message}</div>`;
+  }
+}
+
+async function loadInvestorFor(ticker) {
+  const container = document.getElementById('investor-container');
+  if (!container) return;
+  container.innerHTML = `<div class="loading-mini">매매 동향 불러오는 중…</div>`;
+  try {
+    const data = await fetchInvestor(ticker);
+    container.innerHTML = renderInvestorSection(data.days || []);
+  } catch (e) {
+    container.innerHTML = `<div class="error-box">매매 동향 로드 실패: ${e.message}</div>`;
   }
 }
 
 // ===== 이벤트 =====
 function setupEvents() {
-  document.getElementById('add-btn').onclick = async () => {
-    const ti = document.getElementById('ticker-input');
-    const ni = document.getElementById('name-input');
-    const ticker = ti.value.trim();
-    let name = ni.value.trim();
-    if (!ticker) { setStatus('종목코드를 입력해주세요', true); return; }
-    if (!/^\d{6}$/.test(ticker)) { setStatus('종목코드는 숫자 6자리입니다', true); return; }
-    if (stocks.some(s => s.ticker === ticker)) { setStatus('이미 추가된 종목입니다', true); return; }
-    if (!name) name = ticker; // 이름 비우면 코드로
+  const searchInput = document.getElementById('search-input');
+  const searchResults = document.getElementById('search-results');
 
-    stocks.push({ ticker, name });
-    saveStocks();
-    ti.value = '';
-    ni.value = '';
-    renderTreemap();
-    setStatus(`${name} 시세 가져오는 중…`);
-    try {
-      const p = await fetchPrice(ticker);
-      prices[ticker] = p;
-      saveCachedPrices();
-      renderTreemap();
-      setStatus(`${name} 추가 완료`);
-    } catch (e) {
-      setStatus(`${name} 시세 조회 실패: ${e.message}`, true);
+  // 디바운스: 250ms 후 검색 (네트워크 호출이라 좀 길게)
+  let searchTimer = null;
+  searchInput.addEventListener('input', (e) => {
+    clearTimeout(searchTimer);
+    const v = e.target.value;
+    if (!v.trim()) {
+      document.getElementById('search-results').classList.remove('show');
+      return;
     }
-  };
+    searchTimer = setTimeout(() => renderSearchResults(v), 250);
+  });
+  searchInput.addEventListener('focus', (e) => {
+    if (e.target.value) renderSearchResults(e.target.value);
+  });
+  // 외부 클릭 시 결과 닫기
+  document.addEventListener('click', (e) => {
+    const wrap = document.querySelector('.search-wrap');
+    if (wrap && !wrap.contains(e.target)) {
+      searchResults.classList.remove('show');
+    }
+  });
+  // 엔터로 첫 결과 선택
+  searchInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      const first = searchResults.querySelector('.search-result-item');
+      if (first) first.click();
+    } else if (e.key === 'Escape') {
+      searchResults.classList.remove('show');
+      searchInput.blur();
+    }
+  });
 
-  document.getElementById('refresh-btn').onclick = () => fetchAllPrices();
+  document.getElementById('refresh-btn').onclick = () => {
+    fetchAllPrices();
+    refreshTickers();
+  };
 
   document.getElementById('save-api-btn').onclick = () => {
     const url = document.getElementById('api-url-input').value.trim().replace(/\/$/, '');
@@ -362,21 +720,11 @@ function setupEvents() {
     document.getElementById('settings-row').classList.remove('show');
     setStatus('API 주소 저장됨');
     fetchAllPrices();
+    refreshTickers();
   };
 
-  document.getElementById('ticker-input').onkeydown = (e) => {
-    if (e.key === 'Enter') document.getElementById('name-input').focus();
-  };
-  document.getElementById('name-input').onkeydown = (e) => {
-    if (e.key === 'Enter') document.getElementById('add-btn').click();
-  };
-
-  // 모달 닫기 (배경 클릭 또는 아래로 스와이프)
   const overlay = document.getElementById('modal-overlay');
-  overlay.onclick = (e) => {
-    if (e.target === overlay) overlay.classList.remove('show');
-  };
-  // 모바일 스와이프 다운으로 닫기
+  overlay.onclick = (e) => { if (e.target === overlay) overlay.classList.remove('show'); };
   let touchStartY = 0;
   document.getElementById('modal').addEventListener('touchstart', (e) => {
     touchStartY = e.touches[0].clientY;
@@ -388,7 +736,6 @@ function setupEvents() {
     }
   });
 
-  // PWA 설치 프롬프트
   window.addEventListener('beforeinstallprompt', (e) => {
     e.preventDefault();
     deferredInstallPrompt = e;
@@ -407,20 +754,24 @@ function setupEvents() {
   };
 }
 
-// ===== 초기화 =====
 async function init() {
   loadApiUrl();
   loadStocks();
   loadCachedPrices();
+  loadCachedTickers();
   setupEvents();
   renderTreemap();
+  renderTickerBar();
 
   if (!apiBaseUrl) {
     document.getElementById('settings-row').classList.add('show');
     setStatus('API 주소를 입력해주세요 (Cloudflare Worker URL)', true);
     return;
   }
-  await fetchAllPrices();
+
+  // 시세와 시장 지표 병렬 로드
+  await Promise.all([fetchAllPrices(), refreshTickers()]);
+  setInterval(refreshTickers, 60000);
 }
 
 init();
