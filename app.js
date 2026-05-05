@@ -7,6 +7,9 @@ const STORAGE_API_URL = 'kr_api_url_v1';
 const STORAGE_PRICES_CACHE = 'kr_prices_cache_v1';
 const STORAGE_TICKERS_CACHE = 'kr_tickers_cache_v1';
 
+// 기본 API 주소 (저장된 값 없으면 이거 사용)
+const DEFAULT_API_URL = 'https://kis-proxy.dangga2002.workers.dev';
+
 const DEFAULT_STOCKS = [
   { ticker: '005930', name: '삼성전자' },
   { ticker: '000660', name: 'SK하이닉스' },
@@ -33,7 +36,14 @@ function loadStocks() {
   saveStocks();
 }
 function saveStocks() { try { localStorage.setItem(STORAGE_STOCKS, JSON.stringify(stocks)); } catch (e) {} }
-function loadApiUrl() { try { apiBaseUrl = localStorage.getItem(STORAGE_API_URL) || ''; } catch (e) {} }
+function loadApiUrl() {
+  try {
+    const saved = localStorage.getItem(STORAGE_API_URL);
+    apiBaseUrl = saved || DEFAULT_API_URL;
+  } catch (e) {
+    apiBaseUrl = DEFAULT_API_URL;
+  }
+}
 function saveApiUrl(url) { try { localStorage.setItem(STORAGE_API_URL, url); } catch (e) {} apiBaseUrl = url; }
 function loadCachedPrices() {
   try { const raw = localStorage.getItem(STORAGE_PRICES_CACHE); if (raw) prices = JSON.parse(raw); } catch (e) {}
