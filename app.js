@@ -6,6 +6,7 @@ const STORAGE_STOCKS = 'kr_stocks_v1';
 const STORAGE_API_URL = 'kr_api_url_v1';
 const STORAGE_PRICES_CACHE = 'kr_prices_cache_v1';
 const STORAGE_TICKERS_CACHE = 'kr_tickers_cache_v1';
+const STORAGE_SYNC_CODE = 'kr_sync_code_v1';
 
 // 기본 API 주소 (저장된 값 없으면 이거 사용)
 const DEFAULT_API_URL = 'https://kis-proxy.dangga2002.workers.dev';
@@ -24,7 +25,10 @@ let prices = {};
 let apiBaseUrl = '';
 let deferredInstallPrompt = null;
 let tickerData = [];
-let searchAbortController = null;  // 이전 검색 취소용
+let searchAbortController = null;
+let syncCode = '';
+let syncTimer = null;       // 디바운스 타이머
+let syncInProgress = false; // 중복 동기화 방지
 
 // ===== 저장소 =====
 function loadStocks() {
@@ -35,7 +39,81 @@ function loadStocks() {
   stocks = [...DEFAULT_STOCKS];
   saveStocks();
 }
-function saveStocks() { try { localStorage.setItem(STORAGE_STOCKS, JSON.stringify(stocks)); } catch (e) {} }
+function saveStocks() {
+  try { localStorage.setItem(STORAGE_STOCKS, JSON.stringify(stocks)); } catch (e) {}
+  scheduleSync(); // 변경 시마다 1초 후 동기화
+}
+
+// ===== 동기화 코드 관리 =====
+function loadSyncCode() {
+  try {
+    const saved = localStorage.getItem(STORAGE_SYNC_CODE);
+    if (saved && /^[A-Z0-9]{6}$/.test(saved)) {
+      syncCode = saved;
+      return;
+    }
+  } catch (e) {}
+  // 처음 사용 시 자동 생성
+  syncCode = generateSyncCode();
+  try { localStorage.setItem(STORAGE_SYNC_CODE, syncCode); } catch (e) {}
+}
+
+function setSyncCode(code) {
+  if (!/^[A-Z0-9]{6}$/.test(code)) return false;
+  syncCode = code;
+  try { localStorage.setItem(STORAGE_SYNC_CODE, code); } catch (e) {}
+  return true;
+}
+
+function generateSyncCode() {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // 헷갈리는 0,O,1,I 제외
+  let code = '';
+  for (let i = 0; i < 6; i++) {
+    code += chars[Math.floor(Math.random() * chars.length)];
+  }
+  return code;
+}
+
+// 디바운스: 마지막 변경 후 1초 뒤 동기화 (연속 변경 시 한 번만 호출)
+function scheduleSync() {
+  if (!apiBaseUrl || !syncCode) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(() => uploadSync(), 1000);
+}
+
+async function uploadSync() {
+  if (!apiBaseUrl || !syncCode || syncInProgress) return;
+  syncInProgress = true;
+  try {
+    const res = await fetch(`${apiBaseUrl}/sync?code=${syncCode}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stocks }),
+    });
+    if (!res.ok) console.warn('동기화 업로드 실패:', res.status);
+  } catch (e) {
+    console.warn('동기화 업로드 에러:', e.message);
+  } finally {
+    syncInProgress = false;
+  }
+}
+
+async function downloadSync() {
+  if (!apiBaseUrl || !syncCode) return false;
+  try {
+    const res = await fetch(`${apiBaseUrl}/sync?code=${syncCode}`);
+    if (!res.ok) return false;
+    const data = await res.json();
+    if (data.stocks && Array.isArray(data.stocks) && data.stocks.length > 0) {
+      stocks = data.stocks;
+      try { localStorage.setItem(STORAGE_STOCKS, JSON.stringify(stocks)); } catch (e) {}
+      return true;
+    }
+  } catch (e) {
+    console.warn('동기화 다운로드 에러:', e.message);
+  }
+  return false;
+}
 function loadApiUrl() {
   try {
     const saved = localStorage.getItem(STORAGE_API_URL);
@@ -148,9 +226,19 @@ function setStatus(text, isError = false) {
     <button class="settings-link" id="settings-link">설정</button>
   `;
   document.getElementById('settings-link').onclick = () => {
-    document.getElementById('settings-row').classList.toggle('show');
+    const settingsRow = document.getElementById('settings-row');
+    const syncRow = document.getElementById('sync-row');
+    const willShow = !settingsRow.classList.contains('show');
+    settingsRow.classList.toggle('show', willShow);
+    syncRow.classList.toggle('show', willShow);
     document.getElementById('api-url-input').value = apiBaseUrl;
+    updateSyncCodeDisplay();
   };
+}
+
+function updateSyncCodeDisplay() {
+  const el = document.getElementById('sync-code-display');
+  if (el) el.textContent = syncCode || '------';
 }
 
 function colorForChange(pct) {
@@ -357,137 +445,6 @@ function renderTickerBar() {
 }
 
 // ===== 상세 모달 =====
-function renderChart(candles, changePct) {
-  if (!candles || candles.length < 2) return '<div class="loading-mini">차트 데이터 없음</div>';
-  const values = candles.map(c => c.close);
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = max - min || 1;
-  const w = 600, h = 140;
-  const points = values.map((v, i) => {
-    const x = (i / (values.length - 1)) * w;
-    const y = h - ((v - min) / range) * (h - 20) - 10;
-    return { x, y, value: v, date: candles[i].date };
-  });
-  const pointsStr = points.map(p => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
-  const isLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
-  const stroke = changePct >= 0
-    ? (isLight ? '#d4424a' : '#ff6b6b')
-    : (isLight ? '#2d6fc9' : '#5599ff');
-  const fill = changePct >= 0
-    ? (isLight ? 'rgba(212,66,74,0.10)' : 'rgba(255,107,107,0.15)')
-    : (isLight ? 'rgba(45,111,201,0.10)' : 'rgba(85,153,255,0.15)');
-  const areaPoints = `0,${h} ${pointsStr} ${w},${h}`;
-
-  // 데이터를 data 속성으로 임베드 → setupChartHover에서 사용
-  const dataAttr = encodeURIComponent(JSON.stringify(points));
-
-  return `
-    <div class="chart-svg-wrap" data-chart-points="${dataAttr}" data-stroke="${stroke}" style="position: relative; user-select: none;">
-      <svg viewBox="0 0 ${w} ${h}" style="width:100%;height:140px;display:block;" preserveAspectRatio="none" role="img" aria-label="주가 차트">
-        <polygon points="${areaPoints}" fill="${fill}" />
-        <polyline points="${pointsStr}" fill="none" stroke="${stroke}" stroke-width="1.5" />
-        <line class="chart-cursor-line" x1="0" y1="0" x2="0" y2="${h}" stroke="rgba(150,150,150,0.5)" stroke-width="1" stroke-dasharray="3,3" style="display:none;" />
-        <circle class="chart-cursor-dot" cx="0" cy="0" r="4" fill="${stroke}" stroke="var(--bg-2)" stroke-width="2" style="display:none;" />
-      </svg>
-      <div class="chart-tooltip" style="display:none; position:absolute; background:var(--bg-elev); border:1px solid var(--border-strong); border-radius:6px; padding:6px 10px; font-size:11px; line-height:1.5; box-shadow:0 2px 8px rgba(0,0,0,0.4); white-space:nowrap; pointer-events:none; z-index:5;">
-        <div class="ct-date" style="color:var(--text-3); font-size:10px;"></div>
-        <div class="ct-price" style="font-weight:500; color:var(--text);"></div>
-      </div>
-    </div>
-  `;
-}
-
-// 차트에 호버/터치 이벤트 추가
-function setupChartHover(container) {
-  const wrap = container.querySelector('.chart-svg-wrap');
-  if (!wrap) return;
-  const svg = wrap.querySelector('svg');
-  const line = wrap.querySelector('.chart-cursor-line');
-  const dot = wrap.querySelector('.chart-cursor-dot');
-  const tooltip = wrap.querySelector('.chart-tooltip');
-  const dateEl = tooltip.querySelector('.ct-date');
-  const priceEl = tooltip.querySelector('.ct-price');
-
-  let points;
-  try {
-    points = JSON.parse(decodeURIComponent(wrap.dataset.chartPoints));
-  } catch (e) { return; }
-  if (!points || points.length === 0) return;
-
-  const W = 600;
-
-  function getXFromEvent(e) {
-    const rect = wrap.getBoundingClientRect();
-    let clientX;
-    if (e.touches && e.touches[0]) clientX = e.touches[0].clientX;
-    else clientX = e.clientX;
-    const ratio = (clientX - rect.left) / rect.width;
-    return Math.max(0, Math.min(1, ratio)) * W;
-  }
-
-  function findClosest(x) {
-    let closest = points[0];
-    let minDist = Math.abs(points[0].x - x);
-    for (const p of points) {
-      const d = Math.abs(p.x - x);
-      if (d < minDist) { minDist = d; closest = p; }
-    }
-    return closest;
-  }
-
-  function showAt(p) {
-    line.setAttribute('x1', p.x);
-    line.setAttribute('x2', p.x);
-    line.style.display = '';
-    dot.setAttribute('cx', p.x);
-    dot.setAttribute('cy', p.y);
-    dot.style.display = '';
-
-    const rect = wrap.getBoundingClientRect();
-    const xPx = (p.x / W) * rect.width;
-    // 툴팁 위치: 점 위에 표시, 화면 밖으로 안 나가게
-    const tipW = 80;
-    let left = xPx - tipW / 2;
-    if (left < 4) left = 4;
-    if (left + tipW > rect.width - 4) left = rect.width - tipW - 4;
-    tooltip.style.left = `${left}px`;
-    tooltip.style.top = `4px`;
-    tooltip.style.display = '';
-
-    dateEl.textContent = formatDateMD(p.date);
-    priceEl.textContent = `${Math.round(p.value).toLocaleString('ko-KR')}원`;
-  }
-
-  function hide() {
-    line.style.display = 'none';
-    dot.style.display = 'none';
-    tooltip.style.display = 'none';
-  }
-
-  // 마우스
-  wrap.addEventListener('mousemove', (e) => {
-    const x = getXFromEvent(e);
-    showAt(findClosest(x));
-  });
-  wrap.addEventListener('mouseleave', hide);
-
-  // 터치 (모바일)
-  wrap.addEventListener('touchstart', (e) => {
-    e.preventDefault();
-    const x = getXFromEvent(e);
-    showAt(findClosest(x));
-  }, { passive: false });
-  wrap.addEventListener('touchmove', (e) => {
-    e.preventDefault();
-    const x = getXFromEvent(e);
-    showAt(findClosest(x));
-  }, { passive: false });
-  wrap.addEventListener('touchend', () => {
-    setTimeout(hide, 1500); // 터치 후 1.5초 뒤 사라짐
-  });
-}
-
 function formatDateMD(yyyymmdd) {
   if (!yyyymmdd || yyyymmdd.length !== 8) return '';
   return `${yyyymmdd.slice(4,6)}.${yyyymmdd.slice(6,8)}`;
@@ -609,16 +566,8 @@ async function showDetail(stock) {
       <div class="stat-item"><div class="stat-label">PBR</div><div class="stat-value">${p.pbr || '—'}</div></div>
     </div>
 
-    <div class="chart-wrap">
-      <div class="chart-tabs">
-        <button class="chart-tab active" data-period="D">일봉</button>
-        <button class="chart-tab" data-period="W">주봉</button>
-        <button class="chart-tab" data-period="M">월봉</button>
-      </div>
-      <div id="chart-container">
-        <div class="loading-mini">차트 불러오는 중…</div>
-      </div>
-      <div class="chart-labels" id="chart-labels"></div>
+    <div class="tv-chart-wrap">
+      <div id="tradingview-chart"></div>
     </div>
 
     <div class="section-title">
@@ -638,35 +587,71 @@ async function showDetail(stock) {
   `;
   overlay.classList.add('show');
 
-  loadChartFor(stock.ticker, 'D');
+  loadTradingViewChart(stock.ticker);
   loadInvestorFor(stock.ticker);
-
-  modal.querySelectorAll('.chart-tab').forEach(tab => {
-    tab.onclick = () => {
-      modal.querySelectorAll('.chart-tab').forEach(t => t.classList.remove('active'));
-      tab.classList.add('active');
-      loadChartFor(stock.ticker, tab.dataset.period);
-    };
-  });
 }
 
-async function loadChartFor(ticker, period) {
-  const container = document.getElementById('chart-container');
-  const labels = document.getElementById('chart-labels');
+// ===== TradingView 위젯 로드 =====
+async function loadTradingViewChart(ticker) {
+  const container = document.getElementById('tradingview-chart');
   if (!container) return;
   container.innerHTML = `<div class="loading-mini">차트 불러오는 중…</div>`;
+
+  // tv.js 스크립트가 이미 로드되어 있는지 확인, 없으면 로드
+  await ensureTradingViewScript();
+
+  if (!window.TradingView) {
+    container.innerHTML = `<div class="error-box">차트 라이브러리 로드 실패</div>`;
+    return;
+  }
+
+  // 기존 위젯 제거 후 새로 만들기
+  container.innerHTML = '<div id="tv-widget-host" style="height: 420px;"></div>';
+
+  const isLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+
   try {
-    const data = await fetchChart(ticker, period);
-    const candles = data.candles || [];
-    const p = prices[ticker];
-    container.innerHTML = renderChart(candles, p ? p.changePct : 0);
-    setupChartHover(container);
-    if (candles.length >= 2) {
-      labels.innerHTML = `<span>${formatDateMD(candles[0].date)}</span><span>${formatDateMD(candles[candles.length - 1].date)}</span>`;
-    } else labels.innerHTML = '';
+    new window.TradingView.widget({
+      autosize: true,
+      symbol: `KRX:${ticker}`,         // 한국거래소 종목
+      interval: 'D',                    // 일봉 기본
+      timezone: 'Asia/Seoul',
+      theme: isLight ? 'light' : 'dark',
+      style: '1',                       // 캔들스틱
+      locale: 'kr',
+      toolbar_bg: isLight ? '#f5f5f5' : '#0f0f0f',
+      enable_publishing: false,
+      hide_side_toolbar: true,          // 모바일에선 측면 툴바 숨김
+      hide_top_toolbar: false,
+      hide_legend: false,
+      withdateranges: true,             // 1D/5D/1M/3M/6M/YTD/1Y/5Y/All 버튼
+      allow_symbol_change: false,
+      save_image: false,
+      container_id: 'tv-widget-host',
+      studies: [
+        'MASimple@tv-basicstudies',     // 단순 이동평균선
+      ],
+      backgroundColor: isLight ? '#ffffff' : '#0f0f0f',
+      gridColor: isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)',
+    });
   } catch (e) {
     container.innerHTML = `<div class="error-box">차트 로드 실패: ${e.message}</div>`;
   }
+}
+
+let tvScriptLoading = null;
+function ensureTradingViewScript() {
+  if (window.TradingView) return Promise.resolve();
+  if (tvScriptLoading) return tvScriptLoading;
+  tvScriptLoading = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = 'https://s3.tradingview.com/tv.js';
+    script.async = true;
+    script.onload = () => resolve();
+    script.onerror = () => { tvScriptLoading = null; reject(new Error('script load failed')); };
+    document.head.appendChild(script);
+  });
+  return tvScriptLoading;
 }
 
 async function loadInvestorFor(ticker) {
@@ -733,6 +718,35 @@ function setupEvents() {
     refreshTickers();
   };
 
+  document.getElementById('sync-change-btn').onclick = async () => {
+    const code = prompt(
+      '다른 기기와 종목을 동기화하려면 그 기기의 동기화 코드를 입력하세요.\n\n' +
+      '현재 코드: ' + syncCode + '\n' +
+      '(현재 코드를 다른 기기에 입력해도 됩니다)\n\n' +
+      '6자리 코드 입력:'
+    );
+    if (!code) return;
+    const upperCode = code.trim().toUpperCase();
+    if (!/^[A-Z0-9]{6}$/.test(upperCode)) {
+      alert('잘못된 형식입니다. 영문 대문자/숫자 6자리여야 합니다.');
+      return;
+    }
+    if (!setSyncCode(upperCode)) return;
+    updateSyncCodeDisplay();
+    setStatus(`동기화 코드 변경됨: ${upperCode}`);
+    // 새 코드의 데이터 다운로드
+    const downloaded = await downloadSync();
+    if (downloaded) {
+      renderTreemap();
+      fetchAllPrices();
+      setStatus(`다른 기기의 종목 ${stocks.length}개 불러옴`);
+    } else {
+      // 다운로드할 게 없으면 현재 종목을 새 코드로 업로드
+      uploadSync();
+      setStatus(`이 기기의 종목 ${stocks.length}개를 ${upperCode}로 저장`);
+    }
+  };
+
   const overlay = document.getElementById('modal-overlay');
   overlay.onclick = (e) => { if (e.target === overlay) overlay.classList.remove('show'); };
   let touchStartY = 0;
@@ -766,6 +780,7 @@ function setupEvents() {
 
 async function init() {
   loadApiUrl();
+  loadSyncCode();
   loadStocks();
   loadCachedPrices();
   loadCachedTickers();
@@ -779,9 +794,64 @@ async function init() {
     return;
   }
 
+  // 클라우드에서 종목 목록 다운로드 (다른 기기에서 추가한 게 있으면 받아옴)
+  const downloaded = await downloadSync();
+  if (downloaded) renderTreemap();
+
   // 시세와 시장 지표 병렬 로드
   await Promise.all([fetchAllPrices(), refreshTickers()]);
   setInterval(refreshTickers, 60000);
+
+  // 30초마다 다른 기기에서 변경된 게 있는지 폴링
+  setInterval(async () => {
+    if (syncInProgress) return; // 내가 업로드 중이면 스킵
+    const before = JSON.stringify(stocks);
+    const got = await downloadSync();
+    if (got && JSON.stringify(stocks) !== before) {
+      renderTreemap();
+      fetchAllPrices(); // 새 종목 시세 가져오기
+    }
+  }, 30000);
+
+  // 시세 자동 갱신 (장 운영시간에만)
+  startAutoRefresh();
+}
+
+// ===== 자동 갱신 (장 운영시간 기반) =====
+// 매 5초마다 현재 장 상태 확인하고, 적절한 주기로 갱신
+let lastRefreshAt = 0;
+function startAutoRefresh() {
+  setInterval(() => {
+    const interval = currentRefreshInterval();
+    if (interval === 0) return; // 장 외 시간 → 갱신 안 함
+    const now = Date.now();
+    if (now - lastRefreshAt >= interval) {
+      lastRefreshAt = now;
+      fetchAllPrices();
+    }
+  }, 5000); // 5초마다 체크 (실제 갱신은 interval에 따라)
+}
+
+// 현재 시각 기준으로 적절한 갱신 주기 반환 (ms 단위, 0 = 갱신 안 함)
+function currentRefreshInterval() {
+  const now = new Date();
+  const day = now.getDay(); // 0=일, 6=토
+  if (day === 0 || day === 6) return 0; // 주말
+
+  const hour = now.getHours();
+  const minute = now.getMinutes();
+  const time = hour * 60 + minute; // 분 단위
+
+  // NXT 프리마켓: 08:00 ~ 09:00 → 30초
+  if (time >= 8 * 60 && time < 9 * 60) return 30000;
+
+  // KRX 정규장 (NXT 메인마켓 포함): 09:00 ~ 15:30 → 10초
+  if (time >= 9 * 60 && time < 15 * 60 + 30) return 10000;
+
+  // NXT 애프터마켓 + KRX 시간외: 15:30 ~ 20:00 → 30초
+  if (time >= 15 * 60 + 30 && time < 20 * 60) return 30000;
+
+  return 0;
 }
 
 init();

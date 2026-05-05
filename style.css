@@ -103,6 +103,42 @@ body {
 .settings-row { display: none; gap: 6px; margin-bottom: 10px; }
 .settings-row.show { display: flex; }
 
+.sync-row {
+  display: none;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 12px;
+  background: var(--bg-2);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+}
+.sync-row.show { display: flex; }
+.sync-label { color: var(--text-3); }
+.sync-code {
+  flex: 1;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-size: 14px;
+  letter-spacing: 2px;
+  color: var(--text);
+  font-weight: 500;
+  background: var(--bg);
+  padding: 4px 10px;
+  border-radius: 5px;
+  text-align: center;
+  user-select: all;
+  -webkit-user-select: all;
+}
+.sync-btn {
+  background: var(--bg-elev) !important;
+  color: var(--text) !important;
+  border: 1px solid var(--border) !important;
+  padding: 6px 10px !important;
+  font-size: 11px !important;
+  font-weight: 500;
+}
+
 input[type="text"] {
   background: var(--bg-input); color: var(--text);
   border: 1px solid var(--border); border-radius: 8px;
@@ -316,6 +352,26 @@ button:active { background: var(--accent-press); }
 }
 .stat-label { font-size: 10px; color: var(--text-3); }
 .stat-value { font-size: 13px; font-weight: 500; margin-top: 2px; color: var(--text); }
+
+.tv-chart-wrap {
+  margin: 14px 0 8px;
+  background: var(--bg);
+  border-radius: 8px;
+  padding: 0;
+  overflow: hidden;
+  height: 420px;
+}
+@media (prefers-color-scheme: light) {
+  .tv-chart-wrap { border: 1px solid var(--border-3); }
+}
+#tradingview-chart {
+  width: 100%;
+  height: 100%;
+}
+#tradingview-chart > div {
+  width: 100% !important;
+  height: 100% !important;
+}
 
 .chart-wrap {
   margin: 14px 0 8px; background: var(--bg);
