@@ -597,61 +597,52 @@ async function loadTradingViewChart(ticker) {
   if (!container) return;
   container.innerHTML = `<div class="loading-mini">차트 불러오는 중…</div>`;
 
-  // tv.js 스크립트가 이미 로드되어 있는지 확인, 없으면 로드
-  await ensureTradingViewScript();
-
-  if (!window.TradingView) {
-    container.innerHTML = `<div class="error-box">차트 라이브러리 로드 실패</div>`;
+  // ticker 검증
+  if (!ticker || !/^\d{6}$/.test(String(ticker).trim())) {
+    container.innerHTML = `<div class="error-box">잘못된 종목코드: ${ticker}</div>`;
     return;
   }
-
-  // 기존 위젯 제거 후 새로 만들기
-  container.innerHTML = '<div id="tv-widget-host" style="height: 420px;"></div>';
+  const cleanTicker = String(ticker).trim();
+  console.log('[TV] 차트 로드:', cleanTicker, `→ KRX:${cleanTicker}`);
 
   const isLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
 
-  try {
-    new window.TradingView.widget({
-      autosize: true,
-      symbol: `KRX:${ticker}`,         // 한국거래소 종목
-      interval: 'D',                    // 일봉 기본
-      timezone: 'Asia/Seoul',
-      theme: isLight ? 'light' : 'dark',
-      style: '1',                       // 캔들스틱
-      locale: 'kr',
-      toolbar_bg: isLight ? '#f5f5f5' : '#0f0f0f',
-      enable_publishing: false,
-      hide_side_toolbar: true,          // 모바일에선 측면 툴바 숨김
-      hide_top_toolbar: false,
-      hide_legend: false,
-      withdateranges: true,             // 1D/5D/1M/3M/6M/YTD/1Y/5Y/All 버튼
-      allow_symbol_change: false,
-      save_image: false,
-      container_id: 'tv-widget-host',
-      studies: [
-        'MASimple@tv-basicstudies',     // 단순 이동평균선
-      ],
-      backgroundColor: isLight ? '#ffffff' : '#0f0f0f',
-      gridColor: isLight ? 'rgba(0,0,0,0.06)' : 'rgba(255,255,255,0.06)',
-    });
-  } catch (e) {
-    container.innerHTML = `<div class="error-box">차트 로드 실패: ${e.message}</div>`;
-  }
-}
+  // Advanced Chart 위젯 (외부 임베드 방식)
+  // 한국 종목 호환성이 더 좋음
+  const config = {
+    "autosize": true,
+    "symbol": `KRX:${cleanTicker}`,
+    "interval": "D",
+    "timezone": "Asia/Seoul",
+    "theme": isLight ? "light" : "dark",
+    "style": "1",
+    "locale": "kr",
+    "enable_publishing": false,
+    "withdateranges": true,
+    "hide_side_toolbar": true,
+    "allow_symbol_change": false,
+    "save_image": false,
+    "studies": [
+      "STD;SMA"
+    ],
+    "support_host": "https://www.tradingview.com"
+  };
 
-let tvScriptLoading = null;
-function ensureTradingViewScript() {
-  if (window.TradingView) return Promise.resolve();
-  if (tvScriptLoading) return tvScriptLoading;
-  tvScriptLoading = new Promise((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = 'https://s3.tradingview.com/tv.js';
-    script.async = true;
-    script.onload = () => resolve();
-    script.onerror = () => { tvScriptLoading = null; reject(new Error('script load failed')); };
-    document.head.appendChild(script);
-  });
-  return tvScriptLoading;
+  // 컨테이너 초기화 + iframe 강제 로드
+  container.innerHTML = `
+    <div class="tradingview-widget-container" style="height:100%;width:100%">
+      <div class="tradingview-widget-container__widget" style="height:100%;width:100%"></div>
+    </div>
+  `;
+
+  // 임베드 스크립트 동적 추가 (매번 새로 추가해야 함)
+  const widgetWrap = container.querySelector('.tradingview-widget-container');
+  const script = document.createElement('script');
+  script.type = 'text/javascript';
+  script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
+  script.async = true;
+  script.innerHTML = JSON.stringify(config);
+  widgetWrap.appendChild(script);
 }
 
 async function loadInvestorFor(ticker) {
