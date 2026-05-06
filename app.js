@@ -731,7 +731,7 @@ function renderCandleChart(container, candles, period) {
 
   const isLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
   const W = 800, H = 240;
-  const padL = 10, padR = 65, padT = 16, padB = 28;
+  const padL = 4, padR = 4, padT = 16, padB = 28;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
 
@@ -783,7 +783,7 @@ function renderCandleChart(container, candles, period) {
     return `
       <line x1="${padL}" y1="${y.toFixed(1)}" x2="${W-padR}" y2="${y.toFixed(1)}"
             stroke="${isLight?'rgba(0,0,0,0.06)':'rgba(255,255,255,0.06)'}" stroke-width="0.5"/>
-      <text x="${W-padR+4}" y="${(y+3.5).toFixed(1)}" font-size="9"
+      <text x="${W-padR-4}" text-anchor="end" y="${(y+3.5).toFixed(1)}" font-size="9"
             fill="${isLight?'#999':'#666'}">${Number(lbl).toLocaleString('ko-KR')}</text>`;
   }).join('');
 
@@ -857,7 +857,7 @@ function renderLineChart(container, candles, period) {
 
   const isLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
   const W = 800, H = 200;
-  const padL = 10, padR = 65, padT = 16, padB = 28;
+  const padL = 4, padR = 4, padT = 16, padB = 28;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
 
@@ -889,7 +889,7 @@ function renderLineChart(container, candles, period) {
     return `
       <line x1="${padL}" y1="${y.toFixed(1)}" x2="${W-padR}" y2="${y.toFixed(1)}"
             stroke="${isLight?'rgba(0,0,0,0.06)':'rgba(255,255,255,0.06)'}" stroke-width="0.5"/>
-      <text x="${W-padR+4}" y="${(y+3.5).toFixed(1)}" font-size="9"
+      <text x="${W-padR-4}" text-anchor="end" y="${(y+3.5).toFixed(1)}" font-size="9"
             fill="${isLight?'#999':'#666'}">${Number(lbl).toLocaleString('ko-KR')}</text>`;
   }).join('');
 
@@ -943,10 +943,8 @@ function setupChartHover(container, data, W, padL, padR, padT, padB, step, py, c
 
   function show(clientX) {
     const rect   = svg.getBoundingClientRect();
-    // 실제 화면 px → SVG 좌표계 변환 (viewBox 비율 적용)
     const scaleX = W / rect.width;
     const svgX   = (clientX - rect.left) * scaleX;
-    // padL~(W-padR) 범위 내에서 인덱스 계산
     const chartX = Math.max(0, Math.min(W - padL - padR, svgX - padL));
     const i      = Math.max(0, Math.min(n-1, Math.round(chartX / step)));
     const c      = data[i];
