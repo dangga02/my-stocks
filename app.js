@@ -619,9 +619,18 @@ async function loadTradingViewChart(ticker) {
     <div id="chart-body" style="position:relative; min-height:60px;"></div>
   `;
 
+  let minuteRefreshTimer = null; // 일봉 자동갱신 타이머
+
   async function drawChart(period, type) {
     const body = container.querySelector('#chart-body');
     body.innerHTML = `<div class="loading-mini">차트 불러오는 중…</div>`;
+
+    // 탭 전환 시 이전 자동갱신 중단
+    if (minuteRefreshTimer) {
+      clearInterval(minuteRefreshTimer);
+      minuteRefreshTimer = null;
+    }
+
     try {
       const data = await fetchChart(ticker, period);
       let candles = data.candles || [];
@@ -629,19 +638,61 @@ async function loadTradingViewChart(ticker) {
       // 일봉(분봉): 장 마감 후 데이터 없으면 최근 30일 일봉으로 대체
       if (period === 'minute' && candles.length === 0) {
         const fallback = await fetchChart(ticker, 'D');
-        const dayCandels = (fallback.candles || []).slice(-30);
+        const dayCandles = (fallback.candles || []).slice(-30);
         body.innerHTML = `<div style="font-size:10px;color:var(--text-3);padding:0 8px 4px;">장 마감 후 — 최근 30일 종가</div>`;
         const subContainer = document.createElement('div');
         body.appendChild(subContainer);
-        renderLineChart(subContainer, dayCandels, 'D');
+        renderLineChart(subContainer, dayCandles, 'D');
         return;
       }
 
       if (type === 'line') renderLineChart(body, candles, period);
       else renderCandleChart(body, candles, period);
+
+      // 일봉 탭: 장 시간(09:00~15:30)이면 30초마다 자동갱신
+      if (period === 'minute' && isMarketOpen()) {
+        minuteRefreshTimer = setInterval(async () => {
+          if (!document.getElementById('tradingview-chart')) {
+            clearInterval(minuteRefreshTimer);
+            return;
+          }
+          // 모달이 닫혔으면 중단
+          if (!document.getElementById('modal-overlay')?.classList.contains('show')) {
+            clearInterval(minuteRefreshTimer);
+            return;
+          }
+          try {
+            const fresh = await fetchChart(ticker, 'minute');
+            const freshCandles = fresh.candles || [];
+            if (freshCandles.length > 0) {
+              renderCandleChart(body, freshCandles, 'minute');
+              // 타이머 label 업데이트
+              const lbl = container.querySelector('#minute-refresh-lbl');
+              if (lbl) lbl.textContent = `🔴 실시간 · ${new Date().toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit', second:'2-digit'})}`;
+            }
+          } catch (e) { /* 갱신 실패 무시 */ }
+        }, 30000);
+
+        // 실시간 표시 레이블
+        const lbl = document.createElement('div');
+        lbl.id = 'minute-refresh-lbl';
+        lbl.style.cssText = 'font-size:10px;color:var(--text-3);padding:2px 8px;';
+        lbl.textContent = `🔴 실시간 · ${new Date().toLocaleTimeString('ko-KR', {hour:'2-digit', minute:'2-digit', second:'2-digit'})}`;
+        body.appendChild(lbl);
+      }
+
     } catch (e) {
       body.innerHTML = `<div class="error-box">차트 로드 실패: ${e.message}</div>`;
     }
+  }
+
+  // 장 시간 체크 (09:00~15:30 평일)
+  function isMarketOpen() {
+    const now  = new Date();
+    const day  = now.getDay();
+    if (day === 0 || day === 6) return false;
+    const t = now.getHours() * 60 + now.getMinutes();
+    return t >= 9 * 60 && t < 15 * 60 + 30;
   }
 
   container.querySelectorAll('.chart-tab').forEach(tab => {
@@ -1009,7 +1060,11 @@ function setupEvents() {
   };
 
   const overlay = document.getElementById('modal-overlay');
-  overlay.onclick = (e) => { if (e.target === overlay) overlay.classList.remove('show'); };
+  overlay.onclick = (e) => {
+    if (e.target === overlay) {
+      overlay.classList.remove('show');
+    }
+  };
   let touchStartY = 0;
   document.getElementById('modal').addEventListener('touchstart', (e) => {
     touchStartY = e.touches[0].clientY;
