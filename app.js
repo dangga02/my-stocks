@@ -836,7 +836,7 @@ function renderCandleChart(container, candles, period) {
               stroke="${isLight?'#fff':'#111'}" stroke-width="1.5" display="none"/>
       <rect id="cv-bg" x="0" y="0" width="1" height="1" rx="3"
             fill="${isLight?'#fff':'#1e1e1e'}" stroke="${isLight?'#ccc':'#555'}" display="none"/>
-      <text id="cv-txt" x="0" y="0" font-size="10"
+      <text id="cv-txt" x="0" y="0" font-size="13"
             fill="${isLight?'#333':'#eee'}" display="none"></text>
     </svg>
     <div style="display:flex;gap:12px;padding:4px 8px;font-size:10px;">
@@ -919,7 +919,7 @@ function renderLineChart(container, candles, period) {
               fill="${stroke}" stroke="${isLight?'#fff':'#111'}" stroke-width="1.5" display="none"/>
       <rect id="cv-bg" x="0" y="0" width="1" height="1" rx="3"
             fill="${isLight?'#fff':'#1e1e1e'}" stroke="${isLight?'#ccc':'#555'}" display="none"/>
-      <text id="cv-txt" x="0" y="0" font-size="10"
+      <text id="cv-txt" x="0" y="0" font-size="13"
             fill="${isLight?'#333':'#eee'}" display="none"></text>
     </svg>
   `;
@@ -959,13 +959,13 @@ function setupChartHover(container, data, W, padL, padR, padT, padB, step, py, c
 
     const label = `${fmtLabel(c)}  ${c.close.toLocaleString('ko-KR')}원`;
     cvTxt.textContent = label;
-    const tipW = label.length * 6 + 14, tipH = 18;
+    const tipW = label.length * 8 + 18, tipH = 22;
     let tipX = dotX + 6;
     if (tipX + tipW > W - padR) tipX = dotX - tipW - 6;
     const tipY = padT + 4;
     cvBg.setAttribute('x', tipX); cvBg.setAttribute('y', tipY);
     cvBg.setAttribute('width', tipW); cvBg.setAttribute('height', tipH);
-    cvTxt.setAttribute('x', tipX + 6); cvTxt.setAttribute('y', tipY + 12);
+    cvTxt.setAttribute('x', tipX + 7); cvTxt.setAttribute('y', tipY + 15);
     cvBg.removeAttribute('display'); cvTxt.removeAttribute('display');
   }
 
