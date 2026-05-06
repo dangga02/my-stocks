@@ -639,7 +639,23 @@ async function loadTradingViewChart(ticker) {
       if (period === 'minute' && candles.length === 0) {
         const fallback = await fetchChart(ticker, 'D');
         const dayCandles = (fallback.candles || []).slice(-30);
-        body.innerHTML = `<div style="font-size:10px;color:var(--text-3);padding:0 8px 4px;">장 마감 후 — 최근 30일 종가</div>`;
+
+        // 현재 시간대에 맞는 메시지
+        const now = new Date();
+        const t = now.getHours() * 60 + now.getMinutes();
+        const day = now.getDay();
+        let msg;
+        if (day === 0 || day === 6) {
+          msg = '주말 — 최근 30일 종가';
+        } else if (t >= 15 * 60 + 30 && t < 20 * 60) {
+          msg = 'NXT 애프터마켓 중 (분봉 미지원) — 최근 30일 종가';
+        } else if (t >= 8 * 60 && t < 9 * 60) {
+          msg = '장 시작 전 — 최근 30일 종가';
+        } else {
+          msg = '정규장 외 시간 — 최근 30일 종가';
+        }
+
+        body.innerHTML = `<div style="font-size:10px;color:var(--text-3);padding:0 8px 4px;">📊 ${msg}</div>`;
         const subContainer = document.createElement('div');
         body.appendChild(subContainer);
         renderLineChart(subContainer, dayCandles, 'D');
