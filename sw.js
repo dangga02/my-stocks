@@ -1,39 +1,19 @@
-// Service Worker for PWA — basic offline cache
-const CACHE_NAME = 'stock-treemap-v1';
-const ASSETS = [
-  './',
-  './index.html',
-  './style.css',
-  './app.js',
-  './manifest.json',
-  './icon-192.png',
-  './icon-512.png',
-];
+// Service Worker — 캐시 비활성화 (강제 새로고침용)
+// 이 파일을 GitHub에 올리면 브라우저가 캐시를 자동으로 비웁니다.
 
 self.addEventListener('install', (e) => {
-  e.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(ASSETS).catch(() => {}))
-  );
   self.skipWaiting();
 });
 
 self.addEventListener('activate', (e) => {
   e.waitUntil(
     caches.keys().then((keys) =>
-      Promise.all(keys.filter((k) => k !== CACHE_NAME).map((k) => caches.delete(k)))
-    )
+      Promise.all(keys.map((k) => caches.delete(k)))
+    ).then(() => self.clients.claim())
   );
-  self.clients.claim();
 });
 
 self.addEventListener('fetch', (e) => {
-  const { request } = e;
-  // API 요청은 절대 캐시하지 않음 (실시간 시세니까)
-  if (request.url.includes('/price') || request.url.includes('/chart') || request.url.includes('/health')) {
-    return;
-  }
-  // HTML/CSS/JS만 캐시 우선
-  e.respondWith(
-    caches.match(request).then((cached) => cached || fetch(request).catch(() => caches.match('./index.html')))
-  );
+  // 캐시 사용 안 함 - 항상 네트워크에서 가져옴
+  e.respondWith(fetch(e.request).catch(() => new Response('offline')));
 });

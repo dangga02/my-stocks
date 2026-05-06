@@ -1,7 +1,7 @@
 {
-  "name": "당우석의 주식관리",
-  "short_name": "즐겨찾는 주식",
-  "description": "나의 관심있는 주식이 한눈에",
+  "name": "내 주식 트리맵",
+  "short_name": "내 주식",
+  "description": "한국 주식을 트리맵으로 한눈에",
   "start_url": "./",
   "display": "standalone",
   "orientation": "portrait",
