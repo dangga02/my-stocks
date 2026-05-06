@@ -942,11 +942,14 @@ function setupChartHover(container, data, W, padL, padR, padT, padB, step, py, c
   const chartH = svg.viewBox.baseVal.height - padT - padB;
 
   function show(clientX) {
-    const rect   = svg.getBoundingClientRect();
-    const scaleX = W / rect.width;
-    const svgX   = (clientX - rect.left) * scaleX;
+    // SVG 내장 좌표 변환 (가장 정확한 방법)
+    const pt = svg.createSVGPoint();
+    pt.x = clientX;
+    pt.y = 0;
+    const svgP = pt.matrixTransform(svg.getScreenCTM().inverse());
+    const svgX = svgP.x;
     const chartX = Math.max(0, Math.min(W - padL - padR, svgX - padL));
-    const i      = Math.max(0, Math.min(n-1, Math.round(chartX / step)));
+    const i = Math.max(0, Math.min(n - 1, Math.round(chartX / step)));
     const c      = data[i];
     if (!c) return;
 
