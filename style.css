@@ -354,23 +354,17 @@ button:active { background: var(--accent-press); }
 .stat-value { font-size: 13px; font-weight: 500; margin-top: 2px; color: var(--text); }
 
 .tv-chart-wrap {
-  margin: 14px 0 8px;
+  margin: 14px 0 4px;
   background: var(--bg);
   border-radius: 8px;
-  padding: 0;
+  padding: 10px 6px 4px;
   overflow: hidden;
-  height: 420px;
 }
 @media (prefers-color-scheme: light) {
   .tv-chart-wrap { border: 1px solid var(--border-3); }
 }
 #tradingview-chart {
   width: 100%;
-  height: 100%;
-}
-#tradingview-chart > div {
-  width: 100% !important;
-  height: 100% !important;
 }
 
 .chart-wrap {
