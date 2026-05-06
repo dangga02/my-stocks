@@ -728,7 +728,7 @@ function renderCanvasChart(container, candles, type) {
     draw();
   }
 
-  const PAD = { l: 6, r: 6, t: 16, b: 28 };
+  const PAD = { l: 6, r: 62, t: 16, b: 28 };
 
   // 이동평균 계산
   function ma(arr, p) {
@@ -790,7 +790,8 @@ function renderCanvasChart(container, candles, type) {
       const y = pyF(price);
       ctx.beginPath(); ctx.moveTo(pl,y); ctx.lineTo(W-pr,y); ctx.stroke();
       const lbl = price>=1000 ? Math.round(price/100)*100 : price.toFixed(0);
-      ctx.fillText(Number(lbl).toLocaleString('ko-KR')+'  ', pl+2, y-2*DPR);
+      ctx.fillStyle = isLight ? '#aaa' : '#666';
+      ctx.fillText(Number(lbl).toLocaleString('ko-KR'), W-pr+4*DPR, y+3*DPR);
     });
 
     // 날짜 레이블
