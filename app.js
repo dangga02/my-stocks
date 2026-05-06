@@ -624,7 +624,19 @@ async function loadTradingViewChart(ticker) {
     body.innerHTML = `<div class="loading-mini">차트 불러오는 중…</div>`;
     try {
       const data = await fetchChart(ticker, period);
-      const candles = data.candles || [];
+      let candles = data.candles || [];
+
+      // 일봉(분봉): 장 마감 후 데이터 없으면 최근 30일 일봉으로 대체
+      if (period === 'minute' && candles.length === 0) {
+        const fallback = await fetchChart(ticker, 'D');
+        const dayCandels = (fallback.candles || []).slice(-30);
+        body.innerHTML = `<div style="font-size:10px;color:var(--text-3);padding:0 8px 4px;">장 마감 후 — 최근 30일 종가</div>`;
+        const subContainer = document.createElement('div');
+        body.appendChild(subContainer);
+        renderLineChart(subContainer, dayCandels, 'D');
+        return;
+      }
+
       if (type === 'line') renderLineChart(body, candles, period);
       else renderCandleChart(body, candles, period);
     } catch (e) {
