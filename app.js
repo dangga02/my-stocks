@@ -595,54 +595,23 @@ async function showDetail(stock) {
 async function loadTradingViewChart(ticker) {
   const container = document.getElementById('tradingview-chart');
   if (!container) return;
-  container.innerHTML = `<div class="loading-mini">차트 불러오는 중…</div>`;
 
-  // ticker 검증
   if (!ticker || !/^\d{6}$/.test(String(ticker).trim())) {
     container.innerHTML = `<div class="error-box">잘못된 종목코드: ${ticker}</div>`;
     return;
   }
   const cleanTicker = String(ticker).trim();
-  console.log('[TV] 차트 로드:', cleanTicker, `→ KRX:${cleanTicker}`);
 
-  const isLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
-
-  // Advanced Chart 위젯 (외부 임베드 방식)
-  // 한국 종목 호환성이 더 좋음
-  const config = {
-    "autosize": true,
-    "symbol": `KRX:${cleanTicker}`,
-    "interval": "D",
-    "timezone": "Asia/Seoul",
-    "theme": isLight ? "light" : "dark",
-    "style": "1",
-    "locale": "kr",
-    "enable_publishing": false,
-    "withdateranges": true,
-    "hide_side_toolbar": true,
-    "allow_symbol_change": false,
-    "save_image": false,
-    "studies": [
-      "STD;SMA"
-    ],
-    "support_host": "https://www.tradingview.com"
-  };
-
-  // 컨테이너 초기화 + iframe 강제 로드
+  // 네이버 증권 차트 iframe 임베드
+  // 풀 차트 페이지: 분봉/일봉/주봉/월봉 + 이동평균선 + 거래량 모두 지원
   container.innerHTML = `
-    <div class="tradingview-widget-container" style="height:100%;width:100%">
-      <div class="tradingview-widget-container__widget" style="height:100%;width:100%"></div>
-    </div>
+    <iframe
+      src="https://m.stock.naver.com/domestic/stock/${cleanTicker}/chart/candle/day"
+      style="width:100%; height:100%; border:none; border-radius:6px;"
+      loading="lazy"
+      title="네이버 증권 차트 ${cleanTicker}"
+    ></iframe>
   `;
-
-  // 임베드 스크립트 동적 추가 (매번 새로 추가해야 함)
-  const widgetWrap = container.querySelector('.tradingview-widget-container');
-  const script = document.createElement('script');
-  script.type = 'text/javascript';
-  script.src = 'https://s3.tradingview.com/external-embedding/embed-widget-advanced-chart.js';
-  script.async = true;
-  script.innerHTML = JSON.stringify(config);
-  widgetWrap.appendChild(script);
 }
 
 async function loadInvestorFor(ticker) {
