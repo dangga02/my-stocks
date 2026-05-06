@@ -943,9 +943,12 @@ function setupChartHover(container, data, W, padL, padR, padT, padB, step, py, c
 
   function show(clientX) {
     const rect   = svg.getBoundingClientRect();
-    const ratio  = (clientX - rect.left) / rect.width;
-    const svgX   = ratio * W;
-    const i      = Math.max(0, Math.min(n-1, Math.round((svgX - padL) / step)));
+    // 실제 화면 px → SVG 좌표계 변환 (viewBox 비율 적용)
+    const scaleX = W / rect.width;
+    const svgX   = (clientX - rect.left) * scaleX;
+    // padL~(W-padR) 범위 내에서 인덱스 계산
+    const chartX = Math.max(0, Math.min(W - padL - padR, svgX - padL));
+    const i      = Math.max(0, Math.min(n-1, Math.round(chartX / step)));
     const c      = data[i];
     if (!c) return;
 
@@ -960,8 +963,10 @@ function setupChartHover(container, data, W, padL, padR, padT, padB, step, py, c
     const label = `${fmtLabel(c)}  ${c.close.toLocaleString('ko-KR')}원`;
     cvTxt.textContent = label;
     const tipW = label.length * 8 + 18, tipH = 22;
-    let tipX = dotX + 6;
-    if (tipX + tipW > W - padR) tipX = dotX - tipW - 6;
+    // 툴팁이 오른쪽 경계 넘으면 왼쪽에 표시
+    let tipX = dotX + 8;
+    if (tipX + tipW > W - padR + 10) tipX = dotX - tipW - 8;
+    if (tipX < padL) tipX = padL;
     const tipY = padT + 4;
     cvBg.setAttribute('x', tipX); cvBg.setAttribute('y', tipY);
     cvBg.setAttribute('width', tipW); cvBg.setAttribute('height', tipH);
