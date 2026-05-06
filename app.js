@@ -595,51 +595,55 @@ async function showDetail(stock) {
 async function loadTradingViewChart(ticker) {
   const container = document.getElementById('tradingview-chart');
   if (!container) return;
-  container.innerHTML = `<div class="loading-mini">차트 불러오는 중…</div>`;
 
   if (!ticker || !/^\d{6}$/.test(String(ticker).trim())) {
     container.innerHTML = `<div class="error-box">잘못된 종목코드: ${ticker}</div>`;
     return;
   }
 
-  // 탭 상태
-  let currentPeriod = 'D';
-  let currentCandles = [];
+  // 탭 정의
+  const TABS = [
+    { key: 'minute', label: '일봉',  type: 'candle' },
+    { key: 'W',      label: '주봉',  type: 'candle' },
+    { key: 'M',      label: '월봉',  type: 'line'   },
+    { key: '5Y',     label: '5년',   type: 'line'   },
+    { key: '10Y',    label: '10년',  type: 'line'   },
+  ];
 
-  async function drawChart(period) {
-    currentPeriod = period;
-    container.querySelector('#chart-body').innerHTML =
-      `<div class="loading-mini">차트 불러오는 중…</div>`;
-    try {
-      const data = await fetchChart(ticker, period);
-      currentCandles = data.candles || [];
-      renderCandleChart(container.querySelector('#chart-body'), currentCandles, period);
-    } catch (e) {
-      container.querySelector('#chart-body').innerHTML =
-        `<div class="error-box">차트 로드 실패: ${e.message}</div>`;
-    }
-  }
+  const tabsHtml = TABS.map((t, i) =>
+    `<button class="chart-tab${i===0?' active':''}" data-period="${t.key}" data-type="${t.type}">${t.label}</button>`
+  ).join('');
 
   container.innerHTML = `
-    <div class="chart-tabs">
-      <button class="chart-tab active" data-period="D">일봉</button>
-      <button class="chart-tab" data-period="W">주봉</button>
-      <button class="chart-tab" data-period="M">월봉</button>
-    </div>
-    <div id="chart-body" style="position:relative;"></div>
+    <div class="chart-tabs">${tabsHtml}</div>
+    <div id="chart-body" style="position:relative; min-height:60px;"></div>
   `;
+
+  async function drawChart(period, type) {
+    const body = container.querySelector('#chart-body');
+    body.innerHTML = `<div class="loading-mini">차트 불러오는 중…</div>`;
+    try {
+      const data = await fetchChart(ticker, period);
+      const candles = data.candles || [];
+      if (type === 'line') renderLineChart(body, candles, period);
+      else renderCandleChart(body, candles, period);
+    } catch (e) {
+      body.innerHTML = `<div class="error-box">차트 로드 실패: ${e.message}</div>`;
+    }
+  }
 
   container.querySelectorAll('.chart-tab').forEach(tab => {
     tab.onclick = () => {
       container.querySelectorAll('.chart-tab').forEach(t => t.classList.remove('active'));
       tab.classList.add('active');
-      drawChart(tab.dataset.period);
+      drawChart(tab.dataset.period, tab.dataset.type);
     };
   });
 
-  drawChart('D');
+  drawChart('minute', 'candle');
 }
 
+// ===== 캔들스틱 차트 (일봉/주봉) =====
 function renderCandleChart(container, candles, period) {
   if (!candles || candles.length < 2) {
     container.innerHTML = `<div class="loading-mini">차트 데이터 없음</div>`;
@@ -648,193 +652,256 @@ function renderCandleChart(container, candles, period) {
 
   const isLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
   const W = 800, H = 240;
-  const padL = 10, padR = 60, padT = 16, padB = 28;
+  const padL = 10, padR = 65, padT = 16, padB = 28;
   const chartW = W - padL - padR;
   const chartH = H - padT - padB;
 
-  // 최근 60개만 표시
-  const data = candles.slice(-60);
+  const data = candles;
   const n = data.length;
 
-  const highs = data.map(c => c.high);
-  const lows  = data.map(c => c.low);
-  const maxP = Math.max(...highs);
-  const minP = Math.min(...lows);
-  const range = maxP - minP || 1;
+  const highs  = data.map(c => c.high  || c.close);
+  const lows   = data.map(c => c.low   || c.close);
+  const maxP   = Math.max(...highs);
+  const minP   = Math.min(...lows);
+  const range  = maxP - minP || 1;
 
-  const candleW = Math.max(3, Math.floor(chartW / n) - 1);
-  const gap = (chartW - candleW * n) / (n - 1 || 1);
+  const candleW = Math.max(2, Math.floor(chartW / n) - 1);
+  const step    = chartW / n;
 
-  function px(price) {
-    return padT + chartH - ((price - minP) / range) * chartH;
-  }
-  function cx(i) {
-    return padL + i * (candleW + gap) + candleW / 2;
-  }
+  function py(price) { return padT + chartH - ((price - minP) / range) * chartH; }
+  function cx(i)     { return padL + i * step + step / 2; }
 
-  // 이동평균선 계산 (5일, 20일)
-  function ma(arr, period) {
+  // 이동평균
+  function ma(arr, p) {
     return arr.map((_, i) => {
-      if (i < period - 1) return null;
-      const sum = arr.slice(i - period + 1, i + 1).reduce((a, b) => a + b, 0);
-      return sum / period;
+      if (i < p - 1) return null;
+      return arr.slice(i - p + 1, i + 1).reduce((a, b) => a + b, 0) / p;
     });
   }
   const closes = data.map(c => c.close);
-  const ma5  = ma(closes, 5);
-  const ma20 = ma(closes, 20);
+  const ma5    = ma(closes, 5);
+  const ma20   = ma(closes, 20);
 
-  function maLine(maArr, color) {
-    const pts = maArr
-      .map((v, i) => v === null ? null : `${cx(i).toFixed(1)},${px(v).toFixed(1)}`)
-      .filter(Boolean);
-    if (pts.length < 2) return '';
-    // 연속 구간만 연결
-    let path = '';
-    let started = false;
+  function maPath(maArr, color) {
+    let d = '';
     maArr.forEach((v, i) => {
-      if (v === null) { started = false; return; }
-      const x = cx(i).toFixed(1), y = px(v).toFixed(1);
-      if (!started) { path += `M${x},${y}`; started = true; }
-      else path += `L${x},${y}`;
+      if (v === null) return;
+      d += (d === '' || maArr[i-1] === null ? 'M' : 'L') +
+           `${cx(i).toFixed(1)},${py(v).toFixed(1)}`;
     });
-    return `<path d="${path}" fill="none" stroke="${color}" stroke-width="1" opacity="0.85"/>`;
+    return d ? `<path d="${d}" fill="none" stroke="${color}" stroke-width="1.2" opacity="0.9"/>` : '';
   }
 
-  // 그리드 라인 (가격 눈금 4개)
-  const gridLines = [0.25, 0.5, 0.75, 1].map(ratio => {
-    const price = minP + range * (1 - ratio);
-    const y = padT + chartH * ratio;
-    const label = price >= 10000
+  // 그리드 + 가격 레이블
+  const gridCount = 4;
+  const grids = Array.from({length: gridCount}, (_, k) => {
+    const ratio = (k + 1) / (gridCount + 1);
+    const price  = minP + range * (1 - ratio);
+    const y      = padT + chartH * ratio;
+    const lbl    = price >= 1000
       ? Math.round(price / 100) * 100
-      : Math.round(price);
+      : price.toFixed(0);
     return `
-      <line x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}"
-            stroke="${isLight ? 'rgba(0,0,0,0.07)' : 'rgba(255,255,255,0.07)'}" stroke-width="0.5"/>
-      <text x="${W - padR + 4}" y="${(y + 3).toFixed(1)}"
-            font-size="9" fill="${isLight ? '#888' : '#666'}">${label.toLocaleString('ko-KR')}</text>
-    `;
+      <line x1="${padL}" y1="${y.toFixed(1)}" x2="${W-padR}" y2="${y.toFixed(1)}"
+            stroke="${isLight?'rgba(0,0,0,0.06)':'rgba(255,255,255,0.06)'}" stroke-width="0.5"/>
+      <text x="${W-padR+4}" y="${(y+3.5).toFixed(1)}" font-size="9"
+            fill="${isLight?'#999':'#666'}">${Number(lbl).toLocaleString('ko-KR')}</text>`;
   }).join('');
 
-  // 캔들 + 심지
+  // 캔들
   const candleSvg = data.map((c, i) => {
-    const up = c.close >= c.open;
-    const color = up
-      ? (isLight ? '#d4424a' : '#ff6b6b')
-      : (isLight ? '#2d6fc9' : '#5599ff');
-    const bodyTop    = px(Math.max(c.open, c.close));
-    const bodyBot    = px(Math.min(c.open, c.close));
-    const bodyH      = Math.max(1, bodyBot - bodyTop);
-    const x          = padL + i * (candleW + gap);
-    const wickX      = cx(i).toFixed(1);
+    const up    = c.close >= c.open;
+    const color = up ? (isLight?'#d4424a':'#ef5350') : (isLight?'#2d6fc9':'#5599ff');
+    const hi    = c.high  || Math.max(c.open, c.close);
+    const lo    = c.low   || Math.min(c.open, c.close);
+    const bTop  = py(Math.max(c.open, c.close));
+    const bBot  = py(Math.min(c.open, c.close));
+    const bH    = Math.max(1, bBot - bTop);
+    const x     = padL + i * step + (step - candleW) / 2;
     return `
-      <line x1="${wickX}" y1="${px(c.high).toFixed(1)}"
-            x2="${wickX}" y2="${px(c.low).toFixed(1)}"
+      <line x1="${cx(i).toFixed(1)}" y1="${py(hi).toFixed(1)}"
+            x2="${cx(i).toFixed(1)}" y2="${py(lo).toFixed(1)}"
             stroke="${color}" stroke-width="1"/>
-      <rect x="${x.toFixed(1)}" y="${bodyTop.toFixed(1)}"
-            width="${candleW}" height="${bodyH.toFixed(1)}"
-            fill="${color}"/>
-    `;
+      <rect x="${x.toFixed(1)}" y="${bTop.toFixed(1)}"
+            width="${candleW}" height="${bH.toFixed(1)}" fill="${color}"/>`;
   }).join('');
 
-  // 날짜 레이블 (처음/중간/끝)
-  function fmtDate(yyyymmdd) {
-    if (!yyyymmdd || yyyymmdd.length < 8) return '';
-    return `${yyyymmdd.slice(4,6)}.${yyyymmdd.slice(6,8)}`;
+  // 날짜/시간 레이블
+  function fmtLabel(c) {
+    if (c.time) {
+      // 분봉: HHMMSS → HH:MM
+      const t = String(c.time).padStart(6,'0');
+      return `${t.slice(0,2)}:${t.slice(2,4)}`;
+    }
+    if (c.date && c.date.length === 8) return `${c.date.slice(4,6)}.${c.date.slice(6,8)}`;
+    return '';
   }
-  const labelIdxs = [0, Math.floor(n / 2), n - 1];
-  const dateLabels = labelIdxs.map(i => `
-    <text x="${cx(i).toFixed(1)}" y="${H - 4}"
-          text-anchor="middle" font-size="9"
-          fill="${isLight ? '#aaa' : '#555'}">${fmtDate(data[i].date)}</text>
-  `).join('');
+  // 5~7개 레이블만 균등 배치
+  const labelCount = Math.min(6, n);
+  const labelIdxs  = Array.from({length: labelCount}, (_, k) => Math.round(k * (n-1) / (labelCount-1)));
+  const dateLabels  = labelIdxs.map(i => `
+    <text x="${cx(i).toFixed(1)}" y="${H-4}" text-anchor="middle" font-size="9"
+          fill="${isLight?'#aaa':'#666'}">${fmtLabel(data[i])}</text>`).join('');
 
-  const svgStr = `
+  container.innerHTML = `
     <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:240px;display:block;overflow:visible;"
-         id="candle-svg" xmlns="http://www.w3.org/2000/svg">
-      ${gridLines}
-      ${candleSvg}
-      ${maLine(ma5,  isLight ? '#e07b00' : '#f0a020')}
-      ${maLine(ma20, isLight ? '#1a7a3c' : '#4caf80')}
+         id="chart-svg" xmlns="http://www.w3.org/2000/svg">
+      ${grids}${candleSvg}
+      ${maPath(ma5,  isLight?'#e07b00':'#f0a020')}
+      ${maPath(ma20, isLight?'#1a7a3c':'#4caf80')}
       ${dateLabels}
-      <!-- 호버용 오버레이 -->
-      <line id="cv-line" x1="0" y1="${padT}" x2="0" y2="${padT + chartH}"
-            stroke="rgba(150,150,150,0.5)" stroke-width="1" stroke-dasharray="3,3" display="none"/>
+      <line id="cv-vline" x1="0" y1="${padT}" x2="0" y2="${padT+chartH}"
+            stroke="rgba(150,150,150,0.45)" stroke-width="1" stroke-dasharray="3,3" display="none"/>
       <circle id="cv-dot" cx="0" cy="0" r="3.5"
-              fill="${isLight ? '#d4424a' : '#ff6b6b'}"
-              stroke="${isLight ? '#fff' : '#0f0f0f'}" stroke-width="1.5" display="none"/>
-      <rect id="cv-bg" x="0" y="0" width="1" height="1"
-            fill="${isLight ? '#fff' : '#1a1a1a'}"
-            stroke="${isLight ? '#ccc' : '#444'}" rx="3" display="none"/>
+              fill="${isLight?'#d4424a':'#ef5350'}"
+              stroke="${isLight?'#fff':'#111'}" stroke-width="1.5" display="none"/>
+      <rect id="cv-bg" x="0" y="0" width="1" height="1" rx="3"
+            fill="${isLight?'#fff':'#1e1e1e'}" stroke="${isLight?'#ccc':'#555'}" display="none"/>
       <text id="cv-txt" x="0" y="0" font-size="10"
-            fill="${isLight ? '#333' : '#eee'}" display="none"></text>
+            fill="${isLight?'#333':'#eee'}" display="none"></text>
+    </svg>
+    <div style="display:flex;gap:12px;padding:4px 8px;font-size:10px;">
+      <span style="color:${isLight?'#e07b00':'#f0a020'}">── MA5</span>
+      <span style="color:${isLight?'#1a7a3c':'#4caf80'}">── MA20</span>
+    </div>
+  `;
+
+  setupChartHover(container, data, W, padL, padR, padT, padB, step, py, cx, fmtLabel);
+}
+
+// ===== 선 그래프 (월봉/5년/10년) =====
+function renderLineChart(container, candles, period) {
+  if (!candles || candles.length < 2) {
+    container.innerHTML = `<div class="loading-mini">차트 데이터 없음</div>`;
+    return;
+  }
+
+  const isLight = window.matchMedia && window.matchMedia('(prefers-color-scheme: light)').matches;
+  const W = 800, H = 200;
+  const padL = 10, padR = 65, padT = 16, padB = 28;
+  const chartW = W - padL - padR;
+  const chartH = H - padT - padB;
+
+  const data   = candles;
+  const n      = data.length;
+  const closes = data.map(c => c.close);
+  const maxP   = Math.max(...closes);
+  const minP   = Math.min(...closes);
+  const range  = maxP - minP || 1;
+  const first  = closes[0];
+  const last   = closes[n-1];
+  const up     = last >= first;
+
+  const stroke = up ? (isLight?'#d4424a':'#ef5350') : (isLight?'#2d6fc9':'#5599ff');
+  const fill   = up ? (isLight?'rgba(212,66,74,0.10)':'rgba(239,83,80,0.15)')
+                    : (isLight?'rgba(45,111,201,0.10)':'rgba(85,153,255,0.15)');
+
+  function py(price) { return padT + chartH - ((price - minP) / range) * chartH; }
+  function cx(i)     { return padL + (i / (n-1)) * chartW; }
+
+  const pts  = data.map((c, i) => `${cx(i).toFixed(1)},${py(c.close).toFixed(1)}`).join(' ');
+  const area = `${padL},${padT+chartH} ${pts} ${padL+chartW},${padT+chartH}`;
+
+  // 그리드
+  const grids = [0.25, 0.5, 0.75].map(ratio => {
+    const price = minP + range * (1 - ratio);
+    const y     = padT + chartH * ratio;
+    const lbl   = price >= 1000 ? Math.round(price/100)*100 : price.toFixed(0);
+    return `
+      <line x1="${padL}" y1="${y.toFixed(1)}" x2="${W-padR}" y2="${y.toFixed(1)}"
+            stroke="${isLight?'rgba(0,0,0,0.06)':'rgba(255,255,255,0.06)'}" stroke-width="0.5"/>
+      <text x="${W-padR+4}" y="${(y+3.5).toFixed(1)}" font-size="9"
+            fill="${isLight?'#999':'#666'}">${Number(lbl).toLocaleString('ko-KR')}</text>`;
+  }).join('');
+
+  // 날짜 레이블
+  function fmtDate(yyyymmdd) {
+    if (!yyyymmdd || yyyymmdd.length < 6) return '';
+    if (yyyymmdd.length === 8) return `${yyyymmdd.slice(0,4)}.${yyyymmdd.slice(4,6)}`;
+    return yyyymmdd;
+  }
+  const labelCount = Math.min(5, n);
+  const dateLabels = Array.from({length:labelCount}, (_,k) => {
+    const i = Math.round(k * (n-1) / (labelCount-1));
+    return `<text x="${cx(i).toFixed(1)}" y="${H-4}" text-anchor="middle" font-size="9"
+                  fill="${isLight?'#aaa':'#666'}">${fmtDate(data[i].date)}</text>`;
+  }).join('');
+
+  container.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:200px;display:block;overflow:visible;"
+         id="chart-svg" xmlns="http://www.w3.org/2000/svg">
+      ${grids}
+      <polygon points="${area}" fill="${fill}"/>
+      <polyline points="${pts}" fill="none" stroke="${stroke}" stroke-width="1.5"/>
+      ${dateLabels}
+      <line id="cv-vline" x1="0" y1="${padT}" x2="0" y2="${padT+chartH}"
+            stroke="rgba(150,150,150,0.45)" stroke-width="1" stroke-dasharray="3,3" display="none"/>
+      <circle id="cv-dot" cx="0" cy="0" r="3.5"
+              fill="${stroke}" stroke="${isLight?'#fff':'#111'}" stroke-width="1.5" display="none"/>
+      <rect id="cv-bg" x="0" y="0" width="1" height="1" rx="3"
+            fill="${isLight?'#fff':'#1e1e1e'}" stroke="${isLight?'#ccc':'#555'}" display="none"/>
+      <text id="cv-txt" x="0" y="0" font-size="10"
+            fill="${isLight?'#333':'#eee'}" display="none"></text>
     </svg>
   `;
 
-  container.innerHTML = svgStr;
+  const step = chartW / (n - 1);
+  setupChartHover(container, data, W, padL, padR, padT, padB, step, py, cx,
+    c => fmtDate(c.date));
+}
 
-  // 이평선 범례
-  const legend = document.createElement('div');
-  legend.style.cssText = 'display:flex;gap:12px;padding:4px 8px;font-size:10px;';
-  legend.innerHTML = `
-    <span style="color:${isLight ? '#e07b00' : '#f0a020'}">── MA5</span>
-    <span style="color:${isLight ? '#1a7a3c' : '#4caf80'}">── MA20</span>
-  `;
-  container.appendChild(legend);
+// ===== 공통 호버 이벤트 =====
+function setupChartHover(container, data, W, padL, padR, padT, padB, step, py, cx, fmtLabel) {
+  const svg     = container.querySelector('#chart-svg');
+  const cvVline = container.querySelector('#cv-vline');
+  const cvDot   = container.querySelector('#cv-dot');
+  const cvBg    = container.querySelector('#cv-bg');
+  const cvTxt   = container.querySelector('#cv-txt');
+  if (!svg || !cvVline) return;
 
-  // 호버 이벤트
-  const svg    = container.querySelector('#candle-svg');
-  const cvLine = container.querySelector('#cv-line');
-  const cvDot  = container.querySelector('#cv-dot');
-  const cvBg   = container.querySelector('#cv-bg');
-  const cvTxt  = container.querySelector('#cv-txt');
+  const n = data.length;
+  const chartH = svg.viewBox.baseVal.height - padT - padB;
 
-  function showHover(clientX) {
-    const rect = svg.getBoundingClientRect();
-    const ratio = (clientX - rect.left) / rect.width;
-    const svgX = ratio * W;
-    const i = Math.max(0, Math.min(n - 1, Math.round((svgX - padL) / (candleW + gap))));
-    const c = data[i];
+  function show(clientX) {
+    const rect   = svg.getBoundingClientRect();
+    const ratio  = (clientX - rect.left) / rect.width;
+    const svgX   = ratio * W;
+    const i      = Math.max(0, Math.min(n-1, Math.round((svgX - padL) / step)));
+    const c      = data[i];
     if (!c) return;
 
     const dotX = cx(i);
-    const dotY = px(c.close);
-    const up = c.close >= c.open;
-    const dotColor = up ? (isLight ? '#d4424a' : '#ff6b6b') : (isLight ? '#2d6fc9' : '#5599ff');
+    const dotY = py(c.close);
 
-    cvLine.setAttribute('x1', dotX); cvLine.setAttribute('x2', dotX);
-    cvLine.removeAttribute('display');
-    cvDot.setAttribute('cx', dotX); cvDot.setAttribute('cy', dotY);
-    cvDot.setAttribute('fill', dotColor);
+    cvVline.setAttribute('x1', dotX); cvVline.setAttribute('x2', dotX);
+    cvDot.setAttribute('cx', dotX);   cvDot.setAttribute('cy', dotY);
+    cvVline.removeAttribute('display');
     cvDot.removeAttribute('display');
 
-    const label = `${fmtDate(c.date)}  ${c.close.toLocaleString('ko-KR')}원`;
+    const label = `${fmtLabel(c)}  ${c.close.toLocaleString('ko-KR')}원`;
     cvTxt.textContent = label;
-
-    // 툴팁 위치
-    const tipW = label.length * 6 + 12;
-    const tipH = 18;
+    const tipW = label.length * 6 + 14, tipH = 18;
     let tipX = dotX + 6;
     if (tipX + tipW > W - padR) tipX = dotX - tipW - 6;
     const tipY = padT + 4;
-
     cvBg.setAttribute('x', tipX); cvBg.setAttribute('y', tipY);
     cvBg.setAttribute('width', tipW); cvBg.setAttribute('height', tipH);
-    cvBg.removeAttribute('display');
     cvTxt.setAttribute('x', tipX + 6); cvTxt.setAttribute('y', tipY + 12);
-    cvTxt.removeAttribute('display');
+    cvBg.removeAttribute('display'); cvTxt.removeAttribute('display');
   }
 
-  function hideHover() {
-    [cvLine, cvDot, cvBg, cvTxt].forEach(el => el.setAttribute('display', 'none'));
+  function hide() {
+    [cvVline, cvDot, cvBg, cvTxt].forEach(el => el.setAttribute('display','none'));
   }
 
-  svg.addEventListener('mousemove', e => showHover(e.clientX));
-  svg.addEventListener('mouseleave', hideHover);
-  svg.addEventListener('touchstart', e => { e.preventDefault(); showHover(e.touches[0].clientX); }, { passive: false });
-  svg.addEventListener('touchmove',  e => { e.preventDefault(); showHover(e.touches[0].clientX); }, { passive: false });
-  svg.addEventListener('touchend', () => setTimeout(hideHover, 1500));
+  svg.addEventListener('mousemove', e => show(e.clientX));
+  svg.addEventListener('mouseleave', hide);
+  svg.addEventListener('touchstart', e => { e.preventDefault(); show(e.touches[0].clientX); }, {passive:false});
+  svg.addEventListener('touchmove',  e => { e.preventDefault(); show(e.touches[0].clientX); }, {passive:false});
+  svg.addEventListener('touchend', () => setTimeout(hide, 1500));
 }
+
+
 
 async function loadInvestorFor(ticker) {
   const container = document.getElementById('investor-container');

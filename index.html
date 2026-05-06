@@ -1,76 +1,37 @@
-<!DOCTYPE html>
-<html lang="ko">
+<!DOCTYPE html PUBLIC "-//W3C//DTD HTML 4.01//EN" "http://www.w3.org/TR/html4/strict.dtd">
+<html>
 <head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-<meta name="theme-color" content="#f5f5f5" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#0f0f0f" media="(prefers-color-scheme: dark)">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="default">
-<meta name="apple-mobile-web-app-title" content="내 주식">
-<meta name="mobile-web-app-capable" content="yes">
-<title>내 주식 트리맵</title>
-<link rel="manifest" href="manifest.json">
-<link rel="icon" type="image/png" href="icon-192.png">
-<link rel="apple-touch-icon" href="icon-192.png">
-<link rel="stylesheet" href="style.css">
+  <meta http-equiv="Content-Type" content="text/html; charset=utf-8">
+  <meta http-equiv="Content-Style-Type" content="text/css">
+  <title></title>
+  <meta name="Generator" content="Cocoa HTML Writer">
+  <meta name="CocoaVersion" content="2685.5">
+  <style type="text/css">
+    p.p2 {margin: 0.0px 0.0px 0.0px 0.0px; font: 11.0px 'Helvetica Neue'; color: #000000; color: rgba(0, 0, 0, 0.85); -webkit-text-stroke: rgba(0, 0, 0, 0.85)}
+    p.p3 {margin: 0.0px 0.0px 0.0px 0.0px; font: 11.0px 'Apple SD Gothic Neo'; color: #000000; color: rgba(0, 0, 0, 0.85); -webkit-text-stroke: rgba(0, 0, 0, 0.85)}
+    p.p4 {margin: 0.0px 0.0px 0.0px 0.0px; font: 12.0px AppleMyungjo; -webkit-text-stroke: #000000}
+    p.p5 {margin: 0.0px 0.0px 0.0px 0.0px; font: 12.0px AppleMyungjo; -webkit-text-stroke: #000000; min-height: 14.0px}
+    p.p6 {margin: 0.0px 0.0px 12.0px 0.0px; font: 12.0px AppleMyungjo; -webkit-text-stroke: #000000}
+    span.s1 {font-kerning: none}
+    span.s2 {font-kerning: none; background-color: #b3b3b3}
+    span.s3 {font: 13.0px Menlo; font-kerning: none}
+    span.s4 {font: 11.0px 'Apple SD Gothic Neo'; font-kerning: none; color: rgba(0, 0, 0, 0.85); background-color: #b3b3b3; -webkit-text-stroke: 0px rgba(0, 0, 0, 0.85)}
+    span.s5 {font: 12.0px AppleMyungjo; font-kerning: none; color: #000000; -webkit-text-stroke: 0px #000000}
+    span.s6 {font: 11.0px 'Helvetica Neue'; font-kerning: none; background-color: #b3b3b3}
+  </style>
 </head>
 <body>
-
-<div class="app">
-  <header class="header">
-    <h1>내 주식</h1>
-    <button class="refresh-btn" id="refresh-btn" aria-label="새로고침">↻</button>
-  </header>
-
-  <div class="settings-row" id="settings-row">
-    <input id="api-url-input" type="text" placeholder="https://kis-proxy.xxx.workers.dev" autocomplete="off" />
-    <button id="save-api-btn">저장</button>
-  </div>
-
-  <div class="sync-row" id="sync-row">
-    <span class="sync-label">동기화 코드</span>
-    <code class="sync-code" id="sync-code-display">------</code>
-    <button class="sync-btn" id="sync-change-btn" title="다른 기기와 연결">변경</button>
-  </div>
-
-  <!-- 검색 입력 -->
-  <div class="search-wrap">
-    <input id="search-input" type="text" placeholder="🔍 종목명 또는 코드 검색 (예: 삼성전자, 005930)" autocomplete="off" />
-    <div class="search-results" id="search-results"></div>
-  </div>
-
-  <div class="status" id="status"></div>
-  <div class="treemap" id="treemap"></div>
-
-  <p class="hint">한국식 색상: 빨강↑ 상승, 파랑↓ 하락 · 종목을 누르면 차트와 뉴스를 볼 수 있어요</p>
-</div>
-
-<div class="ticker-bar" id="ticker-bar">
-  <div class="ticker-track" id="ticker-track">
-    <div class="ticker-loading">시장 지표 불러오는 중…</div>
-  </div>
-</div>
-
-<div class="modal-overlay" id="modal-overlay">
-  <div class="modal" id="modal"></div>
-</div>
-
-<div class="install-prompt" id="install-prompt">
-  <span>홈화면에 추가하면 앱처럼 사용할 수 있어요</span>
-  <div>
-    <button id="install-btn">설치</button>
-    <button class="close-x" id="install-close" aria-label="닫기">×</button>
-  </div>
-</div>
-
-<script src="app.js"></script>
-<script>
-  if ('serviceWorker' in navigator) {
-    window.addEventListener('load', () => {
-      navigator.serviceWorker.register('sw.js').catch(() => {});
-    });
-  }
-</script>
+<h1 style="margin: 0.0px 0.0px 16.1px 0.0px; font: 24.0px AppleMyungjo; -webkit-text-stroke: #000000"><span class="s1">관심 종목</span></h1>
+<p class="p2"><span class="s2">↻</span></p>
+<p class="p3"><span class="s2">저장</span></p>
+<p class="p4"><span class="s1">동기화 코드 </span><span class="s3">------</span><span class="s1"> </span><span class="s4">변경</span></p>
+<p class="p5"><span class="s1"></span><br></p>
+<p class="p5"><span class="s1"></span><br></p>
+<p class="p5"><span class="s1"></span><br></p>
+<p class="p6"><span class="s1"><span class="Apple-converted-space"> </span>종목을 누르면 차트와 뉴스를 볼 수 있어요</span></p>
+<p class="p4"><span class="s1">시장 지표 불러오는 중…</span></p>
+<p class="p5"><span class="s1"></span><br></p>
+<p class="p4"><span class="s1">홈화면에 추가하면 앱처럼 사용할 수 있어요</span></p>
+<p class="p3"><span class="s2">설치</span><span class="s5"> </span><span class="s6">×</span></p>
 </body>
 </html>
