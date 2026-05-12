@@ -557,6 +557,7 @@ async function showDetail(stock) {
   const overlay = document.getElementById('modal-overlay');
   const modal = document.getElementById('modal');
   const p = prices[stock.ticker];
+  const isUS = stock.market === 'US';
 
   if (!p) {
     modal.innerHTML = `
@@ -572,31 +573,63 @@ async function showDetail(stock) {
 
   const sign = p.changePct >= 0 ? '+' : '';
   const direction = p.changePct >= 0 ? 'up' : (p.changePct < 0 ? 'down' : 'neutral');
-  const naverUrl = `https://m.stock.naver.com/domestic/stock/${stock.ticker}/total`;
-  const newsUrl = `https://m.stock.naver.com/domestic/stock/${stock.ticker}/news`;
-  const googleNewsUrl = `https://www.google.com/search?q=${encodeURIComponent(stock.name + ' 주식')}&tbm=nws`;
-  const dartUrl = `https://dart.fss.or.kr/dsab007/main.do?textCrpNm=${encodeURIComponent(stock.name)}`;
+
+  // 가격 포맷
+  const fmtPrice = (v) => isUS
+    ? (v ? `$${Number(v).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}` : '—')
+    : (v ? `${Number(v).toLocaleString('ko-KR')}` : '—');
+
+  const priceStr = isUS
+    ? `$${p.price.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`
+    : `${p.price.toLocaleString('ko-KR')}원`;
+
+  const changeStr = isUS
+    ? `${sign}$${Math.abs(p.change).toFixed(2)} (${sign}${p.changePct.toFixed(2)}%)`
+    : `${sign}${Math.round(p.change).toLocaleString('ko-KR')} (${sign}${p.changePct.toFixed(2)}%)`;
+
+  // 링크
+  const links = isUS ? `
+    <a href="https://finance.yahoo.com/quote/${stock.ticker}" target="_blank" rel="noopener">Yahoo Finance →</a>
+    <a href="https://www.google.com/search?q=${encodeURIComponent(stock.name + ' stock news')}&tbm=nws" target="_blank" rel="noopener">구글 뉴스 →</a>
+    <a href="https://stockanalysis.com/stocks/${stock.ticker.toLowerCase()}/" target="_blank" rel="noopener">Stock Analysis →</a>
+  ` : `
+    <a href="https://m.stock.naver.com/domestic/stock/${stock.ticker}/total" target="_blank" rel="noopener">네이버 종목 →</a>
+    <a href="https://m.stock.naver.com/domestic/stock/${stock.ticker}/news" target="_blank" rel="noopener">네이버 뉴스 →</a>
+    <a href="https://www.google.com/search?q=${encodeURIComponent(stock.name + ' 주식')}&tbm=nws" target="_blank" rel="noopener">구글 뉴스 →</a>
+    <a href="https://dart.fss.or.kr/dsab007/main.do?textCrpNm=${encodeURIComponent(stock.name)}" target="_blank" rel="noopener">DART 공시 →</a>
+  `;
+
+  // 외인/기관/개인은 국장만
+  const investorSection = isUS ? '' : `
+    <div class="section-title">
+      <span>외인 / 기관 / 개인</span>
+      <span class="sub">단위: 주 (순매수)</span>
+    </div>
+    <div id="investor-container">
+      <div class="loading-mini">매매 동향 불러오는 중…</div>
+    </div>
+  `;
 
   modal.innerHTML = `
     <div class="modal-handle"></div>
     <div class="modal-header">
       <div>
-        <p class="modal-name">${stock.name}</p>
+        <p class="modal-name">${stock.name}${isUS ? ' <span style="font-size:11px;color:#7ab8ff;font-weight:600;">US</span>' : ''}</p>
         <p class="modal-ticker">${stock.ticker}</p>
       </div>
       <div>
-        <div class="modal-price">${p.price.toLocaleString('ko-KR')}원</div>
-        <div class="modal-change ${direction}">${sign}${Math.round(p.change).toLocaleString('ko-KR')} (${sign}${p.changePct.toFixed(2)}%)</div>
+        <div class="modal-price">${priceStr}</div>
+        <div class="modal-change ${direction}">${changeStr}</div>
       </div>
     </div>
 
     <div class="stats-grid">
-      <div class="stat-item"><div class="stat-label">시가</div><div class="stat-value">${p.open ? p.open.toLocaleString('ko-KR') : '—'}</div></div>
-      <div class="stat-item"><div class="stat-label">고가</div><div class="stat-value">${p.high ? p.high.toLocaleString('ko-KR') : '—'}</div></div>
-      <div class="stat-item"><div class="stat-label">저가</div><div class="stat-value">${p.low ? p.low.toLocaleString('ko-KR') : '—'}</div></div>
+      <div class="stat-item"><div class="stat-label">시가</div><div class="stat-value">${fmtPrice(p.open)}</div></div>
+      <div class="stat-item"><div class="stat-label">고가</div><div class="stat-value">${fmtPrice(p.high)}</div></div>
+      <div class="stat-item"><div class="stat-label">저가</div><div class="stat-value">${fmtPrice(p.low)}</div></div>
       <div class="stat-item"><div class="stat-label">거래량</div><div class="stat-value">${p.volume ? p.volume.toLocaleString('ko-KR') : '—'}</div></div>
-      <div class="stat-item"><div class="stat-label">52주 최고</div><div class="stat-value">${p.high52 ? p.high52.toLocaleString('ko-KR') : '—'}</div></div>
-      <div class="stat-item"><div class="stat-label">52주 최저</div><div class="stat-value">${p.low52 ? p.low52.toLocaleString('ko-KR') : '—'}</div></div>
+      <div class="stat-item"><div class="stat-label">52주 최고</div><div class="stat-value">${fmtPrice(p.high52)}</div></div>
+      <div class="stat-item"><div class="stat-label">52주 최저</div><div class="stat-value">${fmtPrice(p.low52)}</div></div>
       <div class="stat-item"><div class="stat-label">PER</div><div class="stat-value">${p.per || '—'}</div></div>
       <div class="stat-item"><div class="stat-label">PBR</div><div class="stat-value">${p.pbr || '—'}</div></div>
     </div>
@@ -605,25 +638,14 @@ async function showDetail(stock) {
       <div id="tradingview-chart"></div>
     </div>
 
-    <div class="section-title">
-      <span>외인 / 기관 / 개인</span>
-      <span class="sub">단위: 주 (순매수)</span>
-    </div>
-    <div id="investor-container">
-      <div class="loading-mini">매매 동향 불러오는 중…</div>
-    </div>
+    ${investorSection}
 
-    <div class="link-grid">
-      <a href="${naverUrl}" target="_blank" rel="noopener">네이버 종목 →</a>
-      <a href="${newsUrl}" target="_blank" rel="noopener">네이버 뉴스 →</a>
-      <a href="${googleNewsUrl}" target="_blank" rel="noopener">구글 뉴스 →</a>
-      <a href="${dartUrl}" target="_blank" rel="noopener">DART 공시 →</a>
-    </div>
+    <div class="link-grid">${links}</div>
   `;
   overlay.classList.add('show');
 
   loadTradingViewChart(stock.ticker, stock.market || 'KR');
-  loadInvestorFor(stock.ticker);
+  if (!isUS) loadInvestorFor(stock.ticker);
 }
 
 // ===== TradingView 위젯 로드 =====
