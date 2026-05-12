@@ -133,9 +133,13 @@ function loadCachedTickers() {
 function saveCachedTickers() { try { localStorage.setItem(STORAGE_TICKERS_CACHE, JSON.stringify(tickerData)); } catch (e) {} }
 
 // ===== API =====
-async function fetchPrice(ticker) {
+async function fetchPrice(stock) {
   if (!apiBaseUrl) throw new Error('API 주소가 설정되지 않았습니다');
-  const res = await fetch(`${apiBaseUrl}/price?ticker=${ticker}`);
+  const market = stock.market || 'KR';
+  const url = market === 'US'
+    ? `${apiBaseUrl}/price?ticker=${stock.ticker}&market=US`
+    : `${apiBaseUrl}/price?ticker=${stock.ticker}`;
+  const res = await fetch(url);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `HTTP ${res.status}`);
@@ -170,10 +174,23 @@ async function fetchTickers() {
 // 실시간 검색 — 백엔드 → 네이버 금융 자동완성
 async function searchStocksRemote(query, signal) {
   if (!apiBaseUrl) return [];
-  const res = await fetch(`${apiBaseUrl}/search?q=${encodeURIComponent(query)}`, { signal });
-  if (!res.ok) return [];
-  const data = await res.json();
-  return data.stocks || [];
+
+  // 한국 + 미국 동시 검색
+  const [krRes, usRes] = await Promise.allSettled([
+    fetch(`${apiBaseUrl}/search?q=${encodeURIComponent(query)}`, { signal }),
+    fetch(`${apiBaseUrl}/us-search?q=${encodeURIComponent(query)}`, { signal }),
+  ]);
+
+  const krStocks = krRes.status === 'fulfilled' && krRes.value.ok
+    ? ((await krRes.value.json()).stocks || [])
+    : [];
+
+  const usStocks = usRes.status === 'fulfilled' && usRes.value.ok
+    ? ((await usRes.value.json()).stocks || [])
+    : [];
+
+  // 한국 결과 앞에, 미국 결과 뒤에
+  return [...krStocks, ...usStocks];
 }
 
 async function fetchAllPrices() {
@@ -191,7 +208,7 @@ async function fetchAllPrices() {
   let done = 0, fails = 0;
   for (const s of stocks) {
     try {
-      const p = await fetchPrice(s.ticker);
+      const p = await fetchPrice(s);
       prices[s.ticker] = p;
     } catch (e) { fails++; }
     done++;
@@ -284,6 +301,14 @@ function renderTreemap() {
     name.className = 'cell-name';
     name.textContent = s.name;
 
+    // US 배지
+    if (s.market === 'US') {
+      const badge = document.createElement('span');
+      badge.className = 'cell-us-badge';
+      badge.textContent = 'US';
+      name.appendChild(badge);
+    }
+
     const pct = document.createElement('div');
     pct.className = 'cell-pct';
     if (p) {
@@ -293,7 +318,14 @@ function renderTreemap() {
 
     const price = document.createElement('div');
     price.className = 'cell-price';
-    if (p) price.textContent = `${p.price.toLocaleString('ko-KR')}원`;
+    if (p) {
+      // 미국 주식은 달러 표시
+      if (s.market === 'US') {
+        price.textContent = `$${p.price.toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2})}`;
+      } else {
+        price.textContent = `${p.price.toLocaleString('ko-KR')}원`;
+      }
+    }
 
     cell.appendChild(remove);
     cell.appendChild(name);
@@ -344,12 +376,13 @@ async function renderSearchResults(query) {
     return;
   }
 
-  container.innerHTML = results.slice(0, 8).map(s => {
+  container.innerHTML = results.slice(0, 10).map(s => {
     const alreadyAdded = stocks.some(x => x.ticker === s.ticker);
-    const tagClass = s.market === 'KOSDAQ' ? 'kosdaq' : 'kospi';
-    const tagLabel = s.market === 'KOSDAQ' ? 'KOSDAQ' : 'KOSPI';
+    const isUS = s.market === 'US';
+    const tagClass = isUS ? 'us' : (s.market === 'KOSDAQ' ? 'kosdaq' : 'kospi');
+    const tagLabel = isUS ? 'US' : (s.market === 'KOSDAQ' ? 'KOSDAQ' : 'KOSPI');
     return `
-      <div class="search-result-item" data-ticker="${s.ticker}" data-name="${s.name}" data-added="${alreadyAdded}">
+      <div class="search-result-item" data-ticker="${s.ticker}" data-name="${s.name}" data-market="${s.market}" data-added="${alreadyAdded}">
         <span class="sr-tag ${tagClass}">${tagLabel}</span>
         <span class="sr-name">${highlightMatch(s.name, q)}${alreadyAdded ? ' ✓' : ''}</span>
         <span class="sr-code">${s.ticker}</span>
@@ -357,13 +390,14 @@ async function renderSearchResults(query) {
     `;
   }).join('');
   container.querySelectorAll('.search-result-item').forEach(el => {
-    el.onclick = () => addStockFromSearch(el.dataset.ticker, el.dataset.name, el.dataset.added === 'true');
+    el.onclick = () => addStockFromSearch(el.dataset.ticker, el.dataset.name, el.dataset.added === 'true', el.dataset.market);
   });
 }
 
-async function addStockFromSearch(ticker, name, alreadyAdded) {
+async function addStockFromSearch(ticker, name, alreadyAdded, market) {
   const input = document.getElementById('search-input');
   const results = document.getElementById('search-results');
+  const mkt = market || 'KR';
 
   if (alreadyAdded) {
     setStatus(`${name}은(는) 이미 추가되어 있어요`);
@@ -373,7 +407,7 @@ async function addStockFromSearch(ticker, name, alreadyAdded) {
     return;
   }
 
-  stocks.push({ ticker, name });
+  stocks.push({ ticker, name, market: mkt });
   saveStocks();
   input.value = '';
   results.classList.remove('show');
@@ -381,7 +415,7 @@ async function addStockFromSearch(ticker, name, alreadyAdded) {
   renderTreemap();
   setStatus(`${name} 시세 가져오는 중…`);
   try {
-    const p = await fetchPrice(ticker);
+    const p = await fetchPrice({ ticker, name, market: mkt });
     prices[ticker] = p;
     saveCachedPrices();
     renderTreemap();
