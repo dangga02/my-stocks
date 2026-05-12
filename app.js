@@ -146,9 +146,10 @@ async function fetchPrice(stock) {
   }
   return await res.json();
 }
-async function fetchChart(ticker, period = 'D') {
+async function fetchChart(ticker, period = 'D', market = 'KR') {
   if (!apiBaseUrl) throw new Error('API 주소가 설정되지 않았습니다');
-  const res = await fetch(`${apiBaseUrl}/chart?ticker=${ticker}&period=${period}`);
+  const marketParam = market === 'US' ? '&market=US' : '';
+  const res = await fetch(`${apiBaseUrl}/chart?ticker=${ticker}&period=${period}${marketParam}`);
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
     throw new Error(err.error || `HTTP ${res.status}`);
@@ -621,34 +622,31 @@ async function showDetail(stock) {
   `;
   overlay.classList.add('show');
 
-  loadTradingViewChart(stock.ticker);
+  loadTradingViewChart(stock.ticker, stock.market || 'KR');
   loadInvestorFor(stock.ticker);
 }
 
 // ===== TradingView 위젯 로드 =====
-async function loadTradingViewChart(ticker) {
+async function loadTradingViewChart(ticker, market = 'KR') {
   const container = document.getElementById('tradingview-chart');
   if (!container) return;
 
-  if (!ticker || !/^\d{6}$/.test(String(ticker).trim())) {
-    container.innerHTML = `<div class="error-box">잘못된 종목코드: ${ticker}</div>`;
-    return;
+  if (!ticker) { container.innerHTML = `<div class="error-box">잘못된 종목코드</div>`; return; }
+  if (market === 'KR' && !/^\d{6}$/.test(String(ticker).trim())) {
+    container.innerHTML = `<div class="error-box">잘못된 종목코드: ${ticker}</div>`; return;
   }
 
+  const isUS = market === 'US';
   const TABS = [
-    { key: 'minute', label: '일봉',  type: 'candle' },
-    { key: 'W',      label: '주봉',  type: 'candle' },
-    { key: 'M',      label: '월봉',  type: 'line'   },
-    { key: '5Y',     label: '5년',   type: 'line'   },
-    { key: '10Y',    label: '10년',  type: 'line'   },
+    { key: isUS ? 'D' : 'minute', label: '일봉', type: 'candle' },
+    { key: 'W',   label: '주봉', type: 'candle' },
+    { key: 'M',   label: '월봉', type: 'line'   },
+    { key: '5Y',  label: '5년',  type: 'line'   },
+    { key: '10Y', label: '10년', type: 'line'   },
   ];
 
-  const tabsHtml = TABS.map((t, i) =>
-    `<button class="chart-tab${i===0?' active':''}" data-period="${t.key}" data-type="${t.type}">${t.label}</button>`
-  ).join('');
-
   container.innerHTML = `
-    <div class="chart-tabs">${tabsHtml}</div>
+    <div class="chart-tabs">${TABS.map((t,i)=>`<button class="chart-tab${i===0?' active':''}" data-period="${t.key}" data-type="${t.type}">${t.label}</button>`).join('')}</div>
     <div id="chart-body" style="position:relative; width:100%;"></div>
   `;
 
@@ -658,15 +656,18 @@ async function loadTradingViewChart(ticker) {
     const body = container.querySelector('#chart-body');
     body.innerHTML = `<div class="loading-mini">차트 불러오는 중…</div>`;
     if (minuteRefreshTimer) { clearInterval(minuteRefreshTimer); minuteRefreshTimer = null; }
-
     try {
-      const data = await fetchChart(ticker, period);
+      const data = await fetchChart(ticker, period, market);
       let candles = data.candles || [];
 
-      if (period === 'minute' && candles.length === 0) {
-        const fallback = await fetchChart(ticker, 'D');
+      if (!isUS && period === 'minute' && candles.length === 0) {
+        const fallback = await fetchChart(ticker, 'D', market);
         const dayCandles = (fallback.candles || []).slice(-30);
-        body.innerHTML = `<div style="font-size:10px;color:var(--text-3);padding:0 8px 4px;">📊 장 마감 후 — 최근 30일 종가</div>`;
+        const now = new Date();
+        const t2 = now.getHours() * 60 + now.getMinutes();
+        const day = now.getDay();
+        let msg = day===0||day===6 ? '주말' : t2>=15*60+30&&t2<20*60 ? 'NXT 애프터마켓 중' : '장 외 시간';
+        body.innerHTML = `<div style="font-size:10px;color:var(--text-3);padding:0 8px 4px;">📊 ${msg} — 최근 30일 종가</div>`;
         const sub = document.createElement('div');
         body.appendChild(sub);
         renderCanvasChart(sub, dayCandles, 'line');
@@ -676,29 +677,25 @@ async function loadTradingViewChart(ticker) {
       body.innerHTML = '';
       renderCanvasChart(body, candles, type);
 
-      if (period === 'minute' && isMarketOpen()) {
+      if (!isUS && period === 'minute' && isMarketOpen()) {
         const lbl = document.createElement('div');
         lbl.id = 'minute-refresh-lbl';
         lbl.style.cssText = 'font-size:10px;color:var(--text-3);padding:2px 8px;';
         lbl.textContent = `🔴 실시간 · ${new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}`;
         body.appendChild(lbl);
-
         minuteRefreshTimer = setInterval(async () => {
-          if (!document.getElementById('modal-overlay')?.classList.contains('show')) {
-            clearInterval(minuteRefreshTimer); return;
-          }
+          if (!document.getElementById('modal-overlay')?.classList.contains('show')) { clearInterval(minuteRefreshTimer); return; }
           try {
-            const fresh = await fetchChart(ticker, 'minute');
+            const fresh = await fetchChart(ticker, 'minute', market);
             if ((fresh.candles||[]).length > 0) {
               const b = container.querySelector('#chart-body');
-              const lbl2 = b.querySelector('#minute-refresh-lbl');
               b.innerHTML = '';
               renderCanvasChart(b, fresh.candles, 'candle');
-              const newLbl = document.createElement('div');
-              newLbl.id = 'minute-refresh-lbl';
-              newLbl.style.cssText = 'font-size:10px;color:var(--text-3);padding:2px 8px;';
-              newLbl.textContent = `🔴 실시간 · ${new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}`;
-              b.appendChild(newLbl);
+              const l2 = document.createElement('div');
+              l2.id = 'minute-refresh-lbl';
+              l2.style.cssText = 'font-size:10px;color:var(--text-3);padding:2px 8px;';
+              l2.textContent = `🔴 실시간 · ${new Date().toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit',second:'2-digit'})}`;
+              b.appendChild(l2);
             }
           } catch(e) {}
         }, 30000);
@@ -711,8 +708,8 @@ async function loadTradingViewChart(ticker) {
   function isMarketOpen() {
     const now = new Date(); const day = now.getDay();
     if (day===0||day===6) return false;
-    const t = now.getHours()*60+now.getMinutes();
-    return t>=9*60 && t<15*60+30;
+    const t2 = now.getHours()*60+now.getMinutes();
+    return t2>=9*60 && t2<15*60+30;
   }
 
   container.querySelectorAll('.chart-tab').forEach(tab => {
@@ -723,7 +720,7 @@ async function loadTradingViewChart(ticker) {
     };
   });
 
-  drawChart('minute','candle');
+  drawChart(TABS[0].key, TABS[0].type);
 }
 
 // ===== Canvas 차트 (캔들 + 라인 통합) =====
@@ -1156,23 +1153,16 @@ function startAutoRefresh() {
 // 현재 시각 기준으로 적절한 갱신 주기 반환 (ms 단위, 0 = 갱신 안 함)
 function currentRefreshInterval() {
   const now = new Date();
-  const day = now.getDay(); // 0=일, 6=토
+  const day = now.getDay();
   if (day === 0 || day === 6) return 0; // 주말
 
-  const hour = now.getHours();
-  const minute = now.getMinutes();
-  const time = hour * 60 + minute; // 분 단위
+  const t = now.getHours() * 60 + now.getMinutes();
 
-  // NXT 프리마켓: 08:00 ~ 09:00 → 30초
-  if (time >= 8 * 60 && time < 9 * 60) return 30000;
+  // KRX 정규장: 09:00~15:30 → 10초
+  if (t >= 9 * 60 && t < 15 * 60 + 30) return 10000;
 
-  // KRX 정규장 (NXT 메인마켓 포함): 09:00 ~ 15:30 → 10초
-  if (time >= 9 * 60 && time < 15 * 60 + 30) return 10000;
-
-  // NXT 애프터마켓 + KRX 시간외: 15:30 ~ 20:00 → 30초
-  if (time >= 15 * 60 + 30 && time < 20 * 60) return 30000;
-
-  return 0;
+  // NXT 프리/애프터, 미장 시간대 포함 평일 전체 → 30초
+  return 30000;
 }
 
 init();
